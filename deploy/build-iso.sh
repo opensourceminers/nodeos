@@ -98,13 +98,17 @@ cat > /etc/systemd/system/nodeos-firstboot.service <<'UNIT'
 Description=NodeOS first boot: install Bitcoin node + DATUM Gateway
 After=network-online.target
 Wants=network-online.target
+# the screen owns tty1 while it runs
+Conflicts=getty@tty1.service
 ConditionPathExists=!/var/lib/nodeos/.firstboot-done
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --node-impl $NODE_IMPL --with-datum --prune $PRUNE
+ExecStart=/usr/local/bin/nodeos-firstboot --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --node-impl $NODE_IMPL --with-datum --prune $PRUNE
 ExecStartPost=/usr/bin/touch /var/lib/nodeos/.firstboot-done
+StandardOutput=journal
+TimeoutStartSec=3600
 
 [Install]
 WantedBy=multi-user.target
@@ -150,6 +154,15 @@ d-i partman/confirm boolean true
 d-i partman/confirm_nooverwrite boolean true
 
 d-i apt-setup/non-free-firmware boolean true
+# never use the installer medium as a package source: otherwise the installer
+# ejects it and then asks the user to re-insert "the disc labeled Debian ..."
+d-i apt-setup/cdrom/set-first boolean false
+d-i apt-setup/cdrom/set-next boolean false
+d-i apt-setup/cdrom/set-failed boolean false
+d-i apt-setup/disable-cdrom-entries boolean true
+apt-cdrom-setup apt-setup/cdrom/set-first boolean false
+# keep the medium mounted — late_command copies the NodeOS payload from it
+d-i cdrom-detect/eject boolean false
 tasksel tasksel/first multiselect standard, ssh-server
 # avahi + libnss-mdns: the box is reachable as http://nodeos.local
 d-i pkgsel/include string curl ca-certificates avahi-daemon libnss-mdns
@@ -171,7 +184,9 @@ EOF
 
 # ---------- boot menus: auto-start the preseeded install ----------
 
-BOOT_ARGS="auto=true priority=critical preseed/file=/cdrom/nodeos/preseed.cfg"
+# quiet + dark theme keep the Debian installer as visually mute as a preseed
+# allows; the branded screens are the boot menu and the NodeOS first boot.
+BOOT_ARGS="auto=true priority=critical preseed/file=/cdrom/nodeos/preseed.cfg debian-installer/theme=dark quiet loglevel=3"
 
 log "patching UEFI boot menu (grub)"
 cat > "$WORK/iso/boot/grub/grub.cfg" <<EOF

@@ -471,6 +471,119 @@ if [[ $WITH_DATUM -eq 1 ]]; then
   # the config with fresh RPC cookie credentials on every start.
 fi
 
+# ---------- branded first-boot screen ----------
+# The appliance's longest setup phase (node + DATUM download/build) runs on
+# first boot. This owns tty1 for its duration and shows NodeOS progress
+# instead of a scrolling wall of apt output.
+
+log "installing NodeOS first-boot screen"
+cat > /usr/local/bin/nodeos-firstboot <<'FB'
+#!/usr/bin/env bash
+# Runs the first-boot setup while painting a NodeOS progress screen on tty1.
+# Every argument is passed through to install.sh.
+set -u
+LOG=/var/log/nodeos-firstboot.log
+TTY=/dev/tty1
+SCRIPT=/opt/nodeos/install.sh
+
+# Steps in the order install.sh reaches them; the marker is matched against
+# the log, so a step ticks as soon as its line appears.
+STEP_NAME=(
+  "Installing NodeOS control plane"
+  "Preparing system services"
+  "Installing Bitcoin node"
+  "Building DATUM work engine"
+  "Finishing up"
+)
+STEP_MARK=(
+  "installing nodeosd from"
+  "installing avahi"
+  "installing Bitcoin"
+  "building OCEAN DATUM"
+  "installing NodeOS console banner"
+)
+
+art() {
+  cat <<'ART'
+
+  ███╗   ██╗ ██████╗ ██████╗ ███████╗     ██████╗ ███████╗
+  ████╗  ██║██╔═══██╗██╔══██╗██╔════╝    ██╔═══██╗██╔════╝
+  ██╔██╗ ██║██║   ██║██║  ██║█████╗      ██║   ██║███████╗
+  ██║╚██╗██║██║   ██║██║  ██║██╔══╝      ██║   ██║╚════██║
+  ██║ ╚████║╚██████╔╝██████╔╝███████╗    ╚██████╔╝███████║
+  ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+        Bitcoin mining & node control plane
+
+ART
+}
+
+spin='|/-\'
+draw() { # $1 = elapsed seconds, $2 = spinner index
+  local elapsed="$1" si="$2" i done_ mark
+  printf '\033[2J\033[H'
+  art
+  printf '  Setting up your node — this takes a few minutes.\n'
+  printf '  No action needed. The machine reboots into NodeOS when done.\n\n'
+  for i in "${!STEP_NAME[@]}"; do
+    mark="${STEP_MARK[$i]}"
+    if grep -qF "$mark" "$LOG" 2>/dev/null; then
+      # a step counts as finished once the next one has started
+      if [ $((i + 1)) -lt ${#STEP_MARK[@]} ] && grep -qF "${STEP_MARK[$((i + 1))]}" "$LOG" 2>/dev/null; then
+        printf '   [✓] %s\n' "${STEP_NAME[$i]}"
+      else
+        printf '   [%s] %s\n' "${spin:$((si % 4)):1}" "${STEP_NAME[$i]}"
+      fi
+    else
+      printf '   [ ] %s\n' "${STEP_NAME[$i]}"
+    fi
+  done
+  printf '\n  elapsed: %02d:%02d\n' $((elapsed / 60)) $((elapsed % 60))
+  printf '  detail:  %s\n' "$(tail -n 1 "$LOG" 2>/dev/null | cut -c1-70)"
+}
+
+# take over tty1 for the duration
+systemctl stop getty@tty1.service 2>/dev/null || true
+: > "$LOG"
+
+bash "$SCRIPT" "$@" >> "$LOG" 2>&1 &
+PID=$!
+
+START=$(date +%s)
+SI=0
+while kill -0 "$PID" 2>/dev/null; do
+  draw $(($(date +%s) - START)) "$SI" > "$TTY" 2>/dev/null
+  SI=$((SI + 1))
+  sleep 1
+done
+wait "$PID"; RC=$?
+
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+{
+  printf '\033[2J\033[H'
+  art
+  if [ "$RC" -eq 0 ]; then
+    printf '  Setup complete.\n\n'
+    printf '  Web UI:   https://%s.local/   (or http://%s/)\n' "$(hostname)" "${IP:-<ip>}"
+    printf '            Your browser will warn about the self-signed certificate.\n'
+    printf '            The web UI asks you to set an admin password on first visit.\n\n'
+    printf '  SSH:      ssh nodeos@%s   (password: nodeos — change it with: passwd)\n\n' "${IP:-<ip>}"
+    printf '  Your Bitcoin node is syncing in the background; the web UI shows progress.\n'
+  else
+    printf '  Setup FAILED (exit %s).\n\n' "$RC"
+    printf '  Log: %s\n' "$LOG"
+    printf '  Last lines:\n'
+    tail -n 8 "$LOG" 2>/dev/null | sed 's/^/    /'
+  fi
+  printf '\n  This screen returns to the login prompt in 20 seconds.\n'
+} > "$TTY" 2>/dev/null
+sleep 20
+
+/usr/local/bin/nodeos-banner 2>/dev/null || true
+systemctl start getty@tty1.service 2>/dev/null || true
+exit "$RC"
+FB
+chmod 0755 /usr/local/bin/nodeos-firstboot
+
 # ---------- console branding ----------
 
 log "installing NodeOS console banner"

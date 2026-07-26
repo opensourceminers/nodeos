@@ -22,6 +22,11 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* The UI toggles elements via the hidden attribute; without this, any later
+   display rule (e.g. #auth-overlay { display: flex }) silently wins over the
+   browser default [hidden] { display: none } and the element never hides. */
+[hidden] { display: none !important; }
+
 body {
   background: var(--page);
   color: var(--ink);
