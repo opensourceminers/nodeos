@@ -66,7 +66,28 @@ workstation needed. Already have a node (Umbrel, Start9, DIY)? Skip
 `--with-bitcoind` and point `bitcoind.rpc_*` in `/etc/nodeos/config.json` at
 your existing node: NodeOS runs *alongside*, nothing gets reformatted.
 
-### C. Developer / demo mode (any OS)
+### C. Appliance installer ISO (USB stick or Proxmox)
+
+Build a bootable ISO that installs NodeOS unattended — the Umbrel-style
+install path. Build it on any Debian/Ubuntu machine (a VM or the Proxmox
+host; needs `xorriso curl openssl` and the repo + `dist/` binary):
+
+```bash
+bash deploy/build-iso.sh --keyboard ch --prune 20000
+# → dist/nodeos-installer-amd64.iso
+```
+
+**The ISO wipes the target machine's first disk without asking.** After the
+unattended install the machine powers off — remove the stick / detach the
+ISO, power on, done: `http://<machine-ip>/`, login `nodeos` (password set at
+build time, default `nodeos` — change it). Bitcoin Core installs itself on
+first boot with network.
+
+Test it in Proxmox first: upload the ISO (storage → ISO Images → Upload),
+create a fresh VM booting from it (2 cores / 4 GB / ≥64 GB disk, bridge on
+the miner LAN), start — it installs itself, powers off, detach ISO, boot.
+
+### D. Developer / demo mode (any OS)
 
 ```bash
 go run ./cmd/nodeosd --demo --listen 127.0.0.1:8080
