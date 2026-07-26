@@ -20,6 +20,7 @@ import (
 	"nodeos/internal/auth"
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
+	"nodeos/internal/health"
 	"nodeos/internal/node"
 	"nodeos/internal/server"
 	"nodeos/internal/sim"
@@ -127,6 +128,10 @@ func main() {
 	adm := admin.New(cfg.DataDir)
 	upd := update.New(cfg.Update.Repo, version, cfg.DataDir, adm)
 
+	// system health: cached vitals + threshold alerts
+	hm := health.NewMonitor(cfg.DataDir, feed)
+	go hm.Run(ctx)
+
 	// zero-click discovery on real installs
 	if !cfg.Demo && !*noScan {
 		if cidr, err := fm.StartScan(cfg.ScanCIDR); err == nil {
@@ -139,6 +144,7 @@ func main() {
 	handler := server.New(server.Deps{
 		Cfg: cfg, Version: version, Fleet: fm, Node: nc, Feed: feed,
 		Engine: eng, Auth: authm, Admin: adm, Update: upd,
+		Health: hm, ConfigPath: *cfgPath,
 	}).Handler()
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: handler}

@@ -15,6 +15,8 @@
 #   --listen ADDR      nodeosd listen address (default :80)
 #   --bitcoin-version V  Bitcoin Core version (default 29.0)
 #   --knots-version V  Bitcoin Knots version (default 29.3.knots20260508)
+#   --login-password P console/SSH password for the nodeos user when the
+#                      account has none yet (default: nodeos — change it!)
 #   --no-start         install everything but do not start services
 
 set -euo pipefail
@@ -29,6 +31,7 @@ LISTEN=":80"
 BITCOIN_VERSION="29.0"
 KNOTS_VERSION="29.3.knots20260508"
 NODE_IMPL="core"
+LOGIN_PASSWORD="nodeos"
 NO_START=0
 GO_VERSION="1.26.5"
 
@@ -44,6 +47,7 @@ while [[ $# -gt 0 ]]; do
     --bitcoin-version) BITCOIN_VERSION="$2"; shift 2 ;;
     --knots-version) KNOTS_VERSION="$2"; shift 2 ;;
     --node-impl) NODE_IMPL="$2"; shift 2 ;;
+    --login-password) LOGIN_PASSWORD="$2"; shift 2 ;;
     --no-start) NO_START=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -90,8 +94,24 @@ id -u nodeos >/dev/null 2>&1 || useradd --system --home-dir /var/lib/nodeos --sh
 # (SupplementaryGroups) even when the node is installed later via the web UI
 getent group bitcoin >/dev/null || groupadd --system bitcoin
 usermod -aG bitcoin nodeos
+# journal access for support bundles (journalctl -u nodeosd/bitcoind)
+getent group systemd-journal >/dev/null && usermod -aG systemd-journal nodeos
 mkdir -p /etc/nodeos /var/lib/nodeos
 chown nodeos:nodeos /var/lib/nodeos
+
+# ---------- console/SSH login as nodeos ----------
+# The appliance must be reachable on the machine itself: user nodeos with a
+# login shell. The password is only set when the account has none — an
+# existing password (ISO/cloud-init installs) is never overwritten.
+if [[ "$(getent passwd nodeos | cut -d: -f7)" == */nologin ]]; then
+  usermod -s /bin/bash nodeos
+fi
+SHADOW_HASH="$(getent shadow nodeos | cut -d: -f2)"
+if [[ -z "$SHADOW_HASH" || "$SHADOW_HASH" == "!"* || "$SHADOW_HASH" == "*" ]]; then
+  echo "nodeos:${LOGIN_PASSWORD}" | chpasswd
+  log "console/SSH login enabled: nodeos / ${LOGIN_PASSWORD}  — CHANGE IT (passwd)"
+fi
+getent group sudo >/dev/null && usermod -aG sudo nodeos
 
 install -m 0755 "$BINARY" /usr/local/bin/nodeosd
 
@@ -140,8 +160,9 @@ Wants=network-online.target
 Type=simple
 User=nodeos
 Group=nodeos
-# read access to bitcoind's RPC cookie, even when the node is installed later
-SupplementaryGroups=bitcoin
+# read access to bitcoind's RPC cookie, even when the node is installed later,
+# plus the journal for support bundles
+SupplementaryGroups=bitcoin systemd-journal
 ExecStart=/usr/local/bin/nodeosd --config /etc/nodeos/config.json
 Restart=always
 RestartSec=3
@@ -160,9 +181,12 @@ EOF
 # ---------- mDNS: reachable as http(s)://<hostname>.local ----------
 
 if command -v apt-get >/dev/null 2>&1; then
-  log "installing avahi (mDNS — reach this box as $(hostname).local)"
+  log "installing avahi (mDNS), smartmontools, sudo, openssh-server"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y -qq avahi-daemon libnss-mdns >/dev/null 2>&1 || log "avahi install failed (non-fatal)"
+  apt-get install -y -qq avahi-daemon libnss-mdns smartmontools sudo openssh-server >/dev/null 2>&1 \
+    || log "package install partially failed (non-fatal)"
+  systemctl enable --now ssh >/dev/null 2>&1 || true
+  usermod -aG sudo nodeos 2>/dev/null || true
   mkdir -p /etc/avahi/services
   cat > /etc/avahi/services/nodeos.service <<'EOF'
 <?xml version="1.0" standalone='no'?>
@@ -175,6 +199,53 @@ if command -v apt-get >/dev/null 2>&1; then
 EOF
   systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
 fi
+
+# ---------- SMART collector (root timer -> smart.json for nodeosd) ----------
+
+log "installing SMART collector"
+cat > /usr/local/bin/nodeos-smart <<'EOF'
+#!/usr/bin/env bash
+# Writes condensed SMART data where the unprivileged nodeosd can read it.
+set -u
+OUT=/var/lib/nodeos/health/smart.json
+mkdir -p /var/lib/nodeos/health
+command -v smartctl >/dev/null || exit 0
+DISKS=""
+while read -r dev _; do
+  [ -n "$dev" ] || continue
+  J="$(smartctl -H -A -i --json=c "$dev" 2>/dev/null)" || true
+  [ -n "$J" ] || continue
+  DISKS="${DISKS:+$DISKS,}$J"
+done < <(smartctl --scan | awk '{print $1}')
+printf '{"generated_unix":%s,"disks":[%s]}\n' "$(date +%s)" "$DISKS" > "$OUT.tmp"
+mv "$OUT.tmp" "$OUT"
+chown nodeos:nodeos "$OUT" 2>/dev/null || true
+EOF
+chmod 0755 /usr/local/bin/nodeos-smart
+
+cat > /etc/systemd/system/nodeos-smart.service <<'EOF'
+[Unit]
+Description=NodeOS SMART collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nodeos-smart
+EOF
+
+cat > /etc/systemd/system/nodeos-smart.timer <<'EOF'
+[Unit]
+Description=NodeOS SMART collector (every 30 min)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable --now nodeos-smart.timer >/dev/null 2>&1 || true
+/usr/local/bin/nodeos-smart || true
 
 # ---------- privileged admin helper (node install/switch, self-update) ----------
 # nodeosd runs unprivileged (NoNewPrivileges); privileged operations go

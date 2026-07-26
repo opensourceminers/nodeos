@@ -208,6 +208,7 @@ function render() {
   renderSolo();
   renderMiners();
   renderNode();
+  renderSystem();
   renderWork();
   renderAlerts();
   renderAbout();
@@ -504,6 +505,38 @@ function renderNode() {
       <dt>Peers</dt><dd>${n.connections} (${n.connections_in} inbound)</dd>
       <dt>Mempool</dt><dd>${n.mempool_txs.toLocaleString()} tx · ${fmtBytes(n.mempool_bytes)}</dd>
       <dt>Chain size</dt><dd>${fmtBytes(n.size_on_disk)}${n.pruned ? " (pruned)" : ""}</dd>
+    </dl>`;
+}
+
+// ---------- system health ----------
+
+function renderSystem() {
+  const sys = snapshot.system;
+  const el = $("sys-body");
+  if (!sys || !sys.checked_at || sys.cpu_count === 0) {
+    el.innerHTML = `<div class="empty">System metrics unavailable (Linux only).</div>`;
+    return;
+  }
+  const mem = sys.mem_total_b
+    ? `${fmtBytes(sys.mem_total_b - sys.mem_avail_b)} / ${fmtBytes(sys.mem_total_b)}` : "–";
+  const disks = (sys.disks || []).map((d) =>
+    `<dt>Disk ${esc(d.mount)}</dt><dd>${d.used_pct.toFixed(0)} % used · ${fmtBytes(d.free_b)} free${
+      d.used_pct >= 90 ? ' <span class="fail">— almost full!</span>' : ""}</dd>`).join("");
+  const smart = (sys.smart || []).map((s) => {
+    const state = s.passed === true ? `<span class="ok">healthy</span>`
+      : s.passed === false ? `<span class="fail">FAILING — replace!</span>` : "unknown";
+    const extra = [s.temp_c ? `${s.temp_c} °C` : "", s.wear_pct ? `${s.wear_pct}% worn` : "",
+      s.power_on_hours ? `${Math.round(s.power_on_hours / 24)} days on` : ""].filter(Boolean).join(" · ");
+    return `<dt>SMART ${esc(s.device)}</dt><dd>${state}${extra ? " · " + extra : ""} <span style="color:var(--muted)">${esc(s.model || "")}</span></dd>`;
+  }).join("");
+  el.innerHTML = `
+    <dl class="kv">
+      <dt>CPU load</dt><dd>${sys.load1.toFixed(2)} / ${sys.load5.toFixed(2)} / ${sys.load15.toFixed(2)} <span style="color:var(--muted)">(${sys.cpu_count} cores)</span></dd>
+      <dt>CPU temp</dt><dd>${sys.cpu_temp_c ? sys.cpu_temp_c.toFixed(0) + " °C" : "–"}</dd>
+      <dt>Memory</dt><dd>${mem}</dd>
+      <dt>Uptime</dt><dd>${fmtUptime(sys.uptime_s)}</dd>
+      ${disks}
+      ${smart || `<dt>SMART</dt><dd>no report yet (updates every 30 min)</dd>`}
     </dl>`;
 }
 

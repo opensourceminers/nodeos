@@ -19,8 +19,10 @@ import (
 	"nodeos/internal/auth"
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
+	"nodeos/internal/health"
 	"nodeos/internal/node"
 	"nodeos/internal/store"
+	"nodeos/internal/support"
 	"nodeos/internal/update"
 	"nodeos/internal/work"
 	"nodeos/web"
@@ -37,6 +39,9 @@ type Deps struct {
 	Auth    *auth.Manager
 	Admin   *admin.Client
 	Update  *update.Checker
+	Health  *health.Monitor
+	// ConfigPath is included (redacted) in support bundles.
+	ConfigPath string
 }
 
 type Server struct {
@@ -50,6 +55,8 @@ type Server struct {
 	auth    *auth.Manager
 	admin   *admin.Client
 	update  *update.Checker
+	health  *health.Monitor
+	cfgPath string
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
@@ -60,6 +67,7 @@ func New(d Deps) *Server {
 		cfg: d.Cfg, version: d.Version, started: time.Now(),
 		fleet: d.Fleet, node: d.Node, feed: d.Feed, engine: d.Engine,
 		auth: d.Auth, admin: d.Admin, update: d.Update,
+		health: d.Health, cfgPath: d.ConfigPath,
 		sseSubs: map[chan []byte]struct{}{},
 	}
 	d.Fleet.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
@@ -418,6 +426,25 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, s.engine.Status())
 	})
 
+	mux.HandleFunc("GET /api/system", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, s.health.Last())
+	})
+	mux.HandleFunc("GET /api/support/bundle", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf(`attachment; filename="nodeos-support-%s.tar.gz"`, time.Now().Format("20060102-150405")))
+		if err := support.Write(w, support.Sources{
+			Version:    s.version,
+			Status:     func() any { return s.statusPayload(0) },
+			WorkLog:    func() []string { return s.engine.LogTail(200) },
+			Health:     func() any { return s.health.Last() },
+			ConfigPath: s.cfgPath,
+		}); err != nil {
+			// headers already sent; log path is the best we can do
+			fmt.Fprintf(w, "\nbundle error: %v\n", err)
+		}
+	})
+
 	mux.HandleFunc("GET /api/events", s.handleSSE)
 
 	// Embedded UI. Serve index.html for "/" and let the FS handle assets.
@@ -462,6 +489,7 @@ func (s *Server) statusPayload(histSamples int) map[string]any {
 		"node":      nst,
 		"solo":      solo,
 		"work":      s.engine.Status(),
+		"system":    s.health.Last(),
 		"miners":    s.fleet.Miners(histSamples),
 		"scan":      s.fleet.ScanStatus(),
 	}
