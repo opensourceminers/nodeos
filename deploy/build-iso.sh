@@ -96,7 +96,9 @@ bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --no-start
 cat > /etc/systemd/system/nodeos-firstboot.service <<'UNIT'
 [Unit]
 Description=NodeOS first boot: install Bitcoin node + DATUM Gateway
-After=network-online.target
+# nss-lookup: network-online alone can be reached before DNS works; the
+# script additionally waits for real name resolution before downloading.
+After=network-online.target nss-lookup.target
 Wants=network-online.target
 # the screen owns tty1 while it runs
 Conflicts=getty@tty1.service

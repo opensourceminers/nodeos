@@ -503,6 +503,9 @@ STEP_MARK=(
   "installing NodeOS console banner"
 )
 
+ATTEMPT=1
+STATUS="Setting up your node — this takes a few minutes."
+
 art() {
   cat <<'ART'
 
@@ -522,8 +525,8 @@ draw() { # $1 = elapsed seconds, $2 = spinner index
   local elapsed="$1" si="$2" i done_ mark
   printf '\033[2J\033[H'
   art
-  printf '  Setting up your node — this takes a few minutes.\n'
-  printf '  No action needed. The machine reboots into NodeOS when done.\n\n'
+  printf '  %s\n' "$STATUS"
+  printf '  No action needed — this screen updates itself.\n\n'
   for i in "${!STEP_NAME[@]}"; do
     mark="${STEP_MARK[$i]}"
     if grep -qF "$mark" "$LOG" 2>/dev/null; then
@@ -545,17 +548,61 @@ draw() { # $1 = elapsed seconds, $2 = spinner index
 systemctl stop getty@tty1.service 2>/dev/null || true
 : > "$LOG"
 
-bash "$SCRIPT" "$@" >> "$LOG" 2>&1 &
-PID=$!
-
 START=$(date +%s)
 SI=0
-while kill -0 "$PID" 2>/dev/null; do
-  draw $(($(date +%s) - START)) "$SI" > "$TTY" 2>/dev/null
-  SI=$((SI + 1))
-  sleep 1
+
+# The unit starts seconds after boot; on Debian network-online.target can be
+# reached before DNS actually resolves, which used to make the very first
+# download fail and the whole setup give up. Wait for real name resolution.
+wait_for_dns() {
+  local deadline=$(($(date +%s) + 300))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if getent hosts deb.debian.org >/dev/null 2>&1 \
+       || getent hosts bitcoincore.org >/dev/null 2>&1; then
+      return 0
+    fi
+    STATUS="Waiting for the network…"
+    draw $(($(date +%s) - START)) "$SI" > "$TTY" 2>/dev/null
+    SI=$((SI + 1))
+    sleep 3
+  done
+  return 1
+}
+
+# run_install: runs the installer in the background, painting the screen
+# until it finishes; returns the installer's exit status.
+run_install() {
+  bash "$SCRIPT" "$@" >> "$LOG" 2>&1 &
+  local pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    draw $(($(date +%s) - START)) "$SI" > "$TTY" 2>/dev/null
+    SI=$((SI + 1))
+    sleep 1
+  done
+  wait "$pid"
+}
+
+if ! wait_for_dns; then
+  echo "[firstboot] no DNS after 5 minutes — trying anyway" >> "$LOG"
+fi
+
+RC=1
+for ATTEMPT in 1 2 3; do
+  if [ "$ATTEMPT" -gt 1 ]; then
+    STATUS="Setup attempt $ATTEMPT of 3 (a download failed — retrying)."
+  else
+    STATUS="Setting up your node — this takes a few minutes."
+  fi
+  run_install "$@"; RC=$?
+  [ "$RC" -eq 0 ] && break
+  echo "[firstboot] attempt $ATTEMPT failed (exit $RC)" >> "$LOG"
+  for _ in $(seq 1 20); do
+    STATUS="Attempt $ATTEMPT failed — retrying shortly…"
+    draw $(($(date +%s) - START)) "$SI" > "$TTY" 2>/dev/null
+    SI=$((SI + 1))
+    sleep 1
+  done
 done
-wait "$PID"; RC=$?
 
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 {
