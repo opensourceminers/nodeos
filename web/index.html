@@ -22,33 +22,38 @@
   </div>
 </div>
 
-<header>
-  <div class="wordmark">Node<span>OS</span></div>
-  <span class="badge" id="version">v–</span>
-  <span class="badge demo" id="demo-badge" hidden>DEMO MODE — simulated fleet</span>
-  <div class="header-stats">
-    <div class="header-stat">
-      <div class="v" id="hs-hash">–</div>
-      <div class="k">fleet hashrate</div>
-    </div>
-    <div class="header-stat">
-      <div class="v" id="hs-miners">–</div>
-      <div class="k">miners online</div>
-    </div>
-    <div class="header-stat">
-      <div class="v" id="hs-node">–</div>
-      <div class="k">node</div>
-    </div>
-  </div>
-</header>
+<div class="shell">
 
-<nav id="nav">
-  <button data-tab="dashboard" class="active">Dashboard</button>
-  <button data-tab="miners">Miners <span class="count" id="nav-miner-count"></span></button>
-  <button data-tab="node">Node</button>
-  <button data-tab="alerts">Alerts <span class="count" id="nav-alert-count"></span></button>
-  <button data-tab="settings">Settings</button>
-</nav>
+<aside class="sidebar" id="sidebar">
+  <div class="brand">
+    <div class="wordmark">Node<span>OS</span></div>
+    <span class="badge" id="version">v–</span>
+  </div>
+
+  <nav id="nav">
+    <button data-tab="dashboard" class="active"><span class="ico">▦</span><span class="lbl">Dashboard</span></button>
+    <button data-tab="miners"><span class="ico">⛏</span><span class="lbl">Miners</span><span class="count" id="nav-miner-count"></span></button>
+    <button data-tab="mining"><span class="ico">⚡</span><span class="lbl">Solo mining</span></button>
+    <button data-tab="node"><span class="ico">⛓</span><span class="lbl">Bitcoin node</span></button>
+    <button data-tab="system"><span class="ico">◱</span><span class="lbl">System</span></button>
+    <button data-tab="alerts"><span class="ico">◔</span><span class="lbl">Events</span><span class="count" id="nav-alert-count"></span></button>
+    <button data-tab="settings"><span class="ico">⚙</span><span class="lbl">Settings</span></button>
+  </nav>
+
+  <div class="side-status">
+    <div class="side-stat"><span class="k">Fleet</span><span class="v" id="hs-hash">–</span></div>
+    <div class="side-stat"><span class="k">Miners</span><span class="v" id="hs-miners">–</span></div>
+    <div class="side-stat"><span class="k">Node</span><span class="v" id="hs-node">–</span></div>
+  </div>
+</aside>
+
+<div class="content">
+  <header class="topbar">
+    <button class="menu-toggle" id="menu-toggle" aria-label="Menu">☰</button>
+    <h1 id="page-title">Dashboard</h1>
+    <span class="badge demo" id="demo-badge" hidden>DEMO — simulated fleet</span>
+    <button class="btn small" id="logout-btn" style="margin-left:auto">Log out</button>
+  </header>
 
 <main>
 
@@ -113,11 +118,6 @@
   </div>
 
   <div class="panel">
-    <h2>System health</h2>
-    <div id="sys-body"><div class="empty">Collecting…</div></div>
-  </div>
-
-  <div class="panel">
     <h2>Node software</h2>
     <div class="grid-2">
       <div>
@@ -156,6 +156,18 @@
     </details>
   </div>
 
+</section>
+
+<!-- ============ SYSTEM ============ -->
+<section class="tab" id="tab-system">
+  <div class="panel">
+    <h2>System health</h2>
+    <div id="sys-body"><div class="empty">Collecting…</div></div>
+  </div>
+</section>
+
+<!-- ============ SOLO MINING (work engine) ============ -->
+<section class="tab" id="tab-mining">
   <div class="panel">
     <h2>Work engine — solo mining against this node</h2>
     <div class="work-state" id="w-state"><span class="status-chip offline"><span class="dot"></span>off</span></div>
@@ -282,9 +294,9 @@
         <dt>API</dt><dd><a href="/api/status" target="_blank">/api/status</a> · <a href="/api/miners" target="_blank">/api/miners</a> · <a href="/api/events" target="_blank">/api/events</a></dd>
       </dl>
       <div class="note">
-        NodeOS prototype. No authentication yet — run it on a trusted LAN or
-        VLAN only. Roadmap: passkeys, WireGuard remote access, firmware
-        updates with staged rollout.
+        NodeOS prototype. The UI is password-protected, but there is no
+        remote-access story yet — keep it on a trusted LAN or VLAN. Roadmap:
+        passkeys, WireGuard remote access, staged firmware rollouts.
       </div>
       <div class="note">
         Tip: a <code>{worker}</code> placeholder in the stratum worker name is
@@ -295,6 +307,8 @@
 </section>
 
 </main>
+</div><!-- /content -->
+</div><!-- /shell -->
 
 <script src="app.js"></script>
 </body>

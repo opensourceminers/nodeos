@@ -146,7 +146,16 @@ $("nav").addEventListener("click", (e) => {
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === btn));
   document.querySelectorAll(".tab").forEach((t) =>
     t.classList.toggle("active", t.id === "tab-" + btn.dataset.tab));
+  $("page-title").textContent = btn.querySelector(".lbl").textContent;
+  $("sidebar").classList.remove("open"); // close the drawer on mobile
   if (snapshot) render();
+});
+
+$("menu-toggle").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+
+$("logout-btn").addEventListener("click", async () => {
+  try { await api("POST", "/api/auth/logout"); } catch {}
+  location.reload();
 });
 
 // ---------- live updates ----------
