@@ -402,6 +402,36 @@ type ApplyResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// workerName derives a stratum worker name for a device from its label,
+// keeping only characters pools reliably accept.
+func (m *Manager) workerName(host string) string {
+	m.mu.RLock()
+	label := host
+	if miner, ok := m.miners[host]; ok {
+		label = miner.Label()
+	}
+	m.mu.RUnlock()
+	out := make([]rune, 0, len(label))
+	for _, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_':
+			out = append(out, r)
+		case r == '.' || r == ':' || r == ' ':
+			out = append(out, '-')
+		}
+	}
+	if len(out) == 0 {
+		return "nodeos"
+	}
+	return string(out)
+}
+
+// expandWorker substitutes the per-device worker name into a stratum user
+// containing the {worker} placeholder (e.g. "bc1q….{worker}").
+func expandWorker(user, worker string) string {
+	return strings.ReplaceAll(user, "{worker}", worker)
+}
+
 // ApplyPool pushes the current pool settings to the given hosts (all online
 // miners when hosts is empty), then restarts each device. Devices are
 // updated sequentially with a small stagger so a bad config doesn't take the
@@ -415,20 +445,21 @@ func (m *Manager) ApplyPool(ctx context.Context, hosts []string) []ApplyResult {
 			}
 		}
 	}
-	fields := map[string]any{
-		"stratumURL":  pool.StratumURL,
-		"stratumPort": pool.StratumPort,
-		"stratumUser": pool.StratumUser,
-	}
-	if pool.FallbackURL != "" {
-		fields["fallbackStratumURL"] = pool.FallbackURL
-		fields["fallbackStratumPort"] = pool.FallbackPort
-		fields["fallbackStratumUser"] = pool.FallbackUser
-	}
 	results := make([]ApplyResult, 0, len(hosts))
 	for i, host := range hosts {
 		if i > 0 {
 			time.Sleep(500 * time.Millisecond)
+		}
+		worker := m.workerName(host)
+		fields := map[string]any{
+			"stratumURL":  pool.StratumURL,
+			"stratumPort": pool.StratumPort,
+			"stratumUser": expandWorker(pool.StratumUser, worker),
+		}
+		if pool.FallbackURL != "" {
+			fields["fallbackStratumURL"] = pool.FallbackURL
+			fields["fallbackStratumPort"] = pool.FallbackPort
+			fields["fallbackStratumUser"] = expandWorker(pool.FallbackUser, worker)
 		}
 		res := ApplyResult{Host: host, OK: true}
 		cctx, cancel := context.WithTimeout(ctx, 6*time.Second)

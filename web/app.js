@@ -9,6 +9,7 @@ let snapshot = null;   // last /api/status payload
 let alertsLog = [];    // newest first
 let poolLoaded = false;
 let scanPoller = null;
+let workFormLoaded = false;
 
 // ---------- helpers ----------
 
@@ -146,6 +147,7 @@ function render() {
   renderSolo();
   renderMiners();
   renderNode();
+  renderWork();
   renderAlerts();
   renderAbout();
 }
@@ -178,6 +180,7 @@ function renderTiles() {
     { v: fleet.best_diff ? esc(fleet.best_diff_str) : "–", l: "Best difficulty (all time)" },
     { v: solo.expected_seconds ? fmtDur(solo.expected_seconds) : "–",
       l: "Expected time to block", s: solo.expected_seconds ? "statistical average" : "needs node + hashrate" },
+    workTile(snapshot.work),
   ];
   $("tiles").innerHTML = tiles.map((t) => `
     <div class="tile">
@@ -185,6 +188,17 @@ function renderTiles() {
       <div class="label">${t.l}</div>
       ${t.s ? `<div class="sub">${t.s}</div>` : ""}
     </div>`).join("");
+}
+
+function workTile(w) {
+  if (!w || w.state === "disabled" || !w.state) {
+    return { v: "off", l: "Work engine", s: "solo mining via your own node" };
+  }
+  if (w.state === "running" && w.switched) {
+    return { v: "SOLO", l: "Work engine", s: "fleet mines on YOUR node" };
+  }
+  if (w.state === "running") return { v: "ready", l: "Work engine", s: w.endpoint || "" };
+  return { v: esc(w.state.replace("_", " ")), l: "Work engine", s: "" };
 }
 
 // ---------- fleet chart ----------
@@ -431,6 +445,98 @@ function renderNode() {
       <dt>Chain size</dt><dd>${fmtBytes(n.size_on_disk)}${n.pruned ? " (pruned)" : ""}</dd>
     </dl>`;
 }
+
+// ---------- work engine ----------
+
+const WORK_CHIP = {
+  running:      ["online",  "running"],
+  disabled:     ["offline", "off"],
+  waiting_node: ["warn",    "waiting for node"],
+  starting:     ["warn",    "starting"],
+  backoff:      ["warn",    "restarting"],
+  error:        ["offline", "error"],
+};
+
+function renderWork() {
+  const w = snapshot.work;
+  if (!w) return;
+  const s = w.settings || {};
+  if (!workFormLoaded) {
+    $("w-address").value = s.payout_address || "";
+    $("w-mode").value = s.mode || "solo";
+    $("w-autoswitch").checked = s.auto_switch !== false;
+    workFormLoaded = true;
+  }
+  const [cls, label] = WORK_CHIP[w.state] || ["offline", w.state || "?"];
+  $("w-state").innerHTML =
+    `<span class="status-chip ${cls}"><span class="dot"></span>${esc(label)}</span>` +
+    (w.mock ? ` <span class="badge demo">simulated</span>` : "") +
+    (!w.binary_found && !w.mock
+      ? ` <span class="badge" style="color:var(--warning)">datum_gateway not installed</span>` : "");
+  $("w-detail").textContent = w.detail || "";
+  $("w-endpoint").textContent = w.endpoint ? `stratum+tcp://${w.endpoint}` : "–";
+  $("w-switched").innerHTML = w.switched
+    ? `<span class="ok">yes — fleet mines on your node</span>` : "no";
+  $("w-uptime").textContent = w.uptime_s ? fmtUptime(w.uptime_s) : "–";
+  $("w-restarts").textContent = w.restarts || 0;
+  $("w-enable").hidden = !!s.enabled;
+  $("w-save").hidden = !s.enabled;
+  $("w-disable").hidden = !s.enabled;
+  $("w-point").disabled = w.state !== "running" || w.switched;
+  $("w-back").disabled = !w.switched;
+}
+
+function readWorkForm(enabled) {
+  return {
+    enabled,
+    payout_address: $("w-address").value.trim(),
+    mode: $("w-mode").value,
+    auto_switch: $("w-autoswitch").checked,
+  };
+}
+
+async function saveWork(enabled, okMsg) {
+  try {
+    await api("PUT", "/api/work", readWorkForm(enabled));
+    $("w-result").innerHTML = `<span class="ok">${okMsg}</span>`;
+  } catch (err) {
+    $("w-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+}
+
+$("w-enable").addEventListener("click", () =>
+  saveWork(true, "Enabled — the engine starts as soon as the node is synced."));
+$("w-save").addEventListener("click", () => saveWork(true, "Saved."));
+$("w-disable").addEventListener("click", () => {
+  if (!confirm("Disable the work engine? The fleet switches back to the external pool.")) return;
+  saveWork(false, "Disabled — fleet switching back to the external pool.");
+});
+
+$("w-point").addEventListener("click", async () => {
+  try {
+    await api("POST", "/api/work/switch", { target: "engine" });
+    $("w-result").innerHTML = `<span class="ok">Switching the fleet to your node…</span>`;
+  } catch (err) {
+    $("w-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+$("w-back").addEventListener("click", async () => {
+  try {
+    await api("POST", "/api/work/switch", { target: "external" });
+    $("w-result").innerHTML = `<span class="ok">Switching the fleet back to the pool…</span>`;
+  } catch (err) {
+    $("w-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+
+// gateway log: refresh while the node tab is visible
+setInterval(async () => {
+  if (!document.querySelector("#tab-node.active")) return;
+  try {
+    const res = await api("GET", "/api/work");
+    $("w-log").textContent = (res.log || []).join("\n") || "– no output yet –";
+  } catch {}
+}, 5000);
 
 // ---------- alerts ----------
 

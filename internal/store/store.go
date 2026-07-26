@@ -17,9 +17,26 @@ type PersistedMiner struct {
 	Name   string `json:"name,omitempty"`   // user-assigned label
 }
 
+// WorkSettings is the user-facing configuration of the solo-mining work
+// engine; edited in the UI, persisted here.
+type WorkSettings struct {
+	Enabled       bool   `json:"enabled"`
+	PayoutAddress string `json:"payout_address"`
+	// Mode is "solo" (non-pooled, blocks pay the payout address directly) or
+	// "ocean" (pooled via OCEAN's DATUM protocol, templates still built here).
+	Mode string `json:"mode"`
+	// AutoSwitch points the whole fleet at the engine once the node is synced
+	// and the gateway is healthy.
+	AutoSwitch bool `json:"auto_switch"`
+}
+
 type State struct {
 	Miners []PersistedMiner `json:"miners"`
 	Pool   config.Pool      `json:"pool"`
+	Work   WorkSettings     `json:"work"`
+	// ExternalPool remembers the pool that was active before the fleet was
+	// switched to the work engine, so "switch back" can restore it.
+	ExternalPool *config.Pool `json:"external_pool,omitempty"`
 }
 
 type Store struct {

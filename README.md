@@ -4,9 +4,10 @@
 mining fleets.** One daemon, one UI: plug in a Bitaxe, it appears
 automatically and mines against your own node.
 
-> Status: **prototype v0.1.0** — fleet management, discovery, pool control and
-> node monitoring work today. Work-engine supervision (DATUM/Stratum V2),
-> auth, updates and the flashable appliance image are next.
+> Status: **prototype v0.2.0** — fleet management, discovery, pool control,
+> node monitoring and the DATUM work engine (solo mining against your own
+> node, with auto-switch) work today. Auth, firmware updates and the
+> flashable appliance image are next.
 > Product thinking and full roadmap: [PRODUCT-ANALYSIS.md](PRODUCT-ANALYSIS.md).
 
 Bitcoin only. No shitcoins. No custody — NodeOS never touches private keys.
@@ -21,6 +22,15 @@ Bitcoin only. No shitcoins. No custody — NodeOS never touches private keys.
   with one click (staged apply + restart per device)
 - **Bitcoin Core integration** — sync progress, difficulty, peers, mempool;
   installer can set up bitcoind (cookie auth, pruned or full)
+- **Work engine (solo mining)** — supervises [OCEAN's DATUM
+  Gateway](https://github.com/OCEAN-xyz/datum_gateway): your node builds the
+  block templates, your miners do the work. Two modes: *pure solo* (a found
+  block pays your address) or *OCEAN pooled* (steady payouts, self-built
+  templates). **Auto-switch**: once the node is synced and the gateway
+  healthy, the whole fleet is pointed at your node — previous pool kept as
+  per-device fallback, every miner gets its own worker name
+  (`bc1q….{worker}`). Crash supervision with backoff, health checks, log
+  capture, one-click switch back.
 - **Honest solo odds** — expected time to block and daily chance computed from
   *your* fleet hashrate and *real* network difficulty
 - **Alerts** — miner offline/online, over-temperature, and the
@@ -44,7 +54,7 @@ This creates a Debian 12 cloud-init VM. Then, from your workstation
 
 ```bash
 scp dist/nodeosd-linux-amd64 deploy/install.sh nodeos@<VM-IP>:/tmp/
-ssh nodeos@<VM-IP> "sudo bash /tmp/install.sh --binary /tmp/nodeosd-linux-amd64 --with-bitcoind --prune 20000"
+ssh nodeos@<VM-IP> "sudo bash /tmp/install.sh --binary /tmp/nodeosd-linux-amd64 --with-bitcoind --with-datum --prune 20000"
 ```
 
 Open `http://<VM-IP>/`. **The VM's bridge must sit on the same L2 network as
@@ -114,7 +124,8 @@ go run ./cmd/nodeosd --demo --listen 127.0.0.1:8080
 `GET /api/status` · `GET/POST /api/miners` · `DELETE /api/miners/{host}` ·
 `POST /api/miners/{host}/restart` · `PATCH /api/miners/{host}` (tuning) ·
 `GET/PUT /api/pool` · `POST /api/pool/apply` · `POST|GET /api/scan` ·
-`GET /api/node` · `GET /api/alerts` · `GET /api/events` (SSE)
+`GET /api/node` · `GET/PUT /api/work` · `POST /api/work/switch` ·
+`GET /api/alerts` · `GET /api/events` (SSE)
 
 ## Architecture
 
@@ -128,6 +139,7 @@ cmd/nodeosd        entrypoint
 internal/axeos     ESP-Miner/AxeOS REST client
 internal/fleet     discovery, polling, history, pool apply
 internal/node      bitcoind JSON-RPC status
+internal/work      work engine: DATUM gateway supervision + fleet auto-switch
 internal/sim       simulated miners (demo mode)
 internal/server    REST API + SSE + embedded UI
 web/               dashboard (vanilla JS, no build step)
@@ -144,14 +156,15 @@ deploy/            installer, Proxmox VM script
 
 ## Roadmap (next)
 
-1. **Work engine**: supervise DATUM Gateway / SRI Stratum-V2 endpoint so
-   miners solo-mine against the local node with pool failover — the
-   auto-switch-when-synced magic moment
+1. Verify the DATUM work engine on real hardware (Proxmox VM + Bitaxe fleet);
+   wire `blocknotify` for instant new-block templates (polling fallback works
+   today)
 2. Auth (passkeys) + HTTPS
 3. Firmware updates with staged rollout (1 device → verify → fleet)
 4. **Appliance image**: preinstalled Pi 5 / x86 image (Debian base, A/B
    partitions via RAUC, signed updates) — the Umbrel/StartOS-style install path
 5. Alerts via push/Nostr/Telegram; energy automation via Home Assistant
+6. Stratum V2 (SRI) as an alternative work-engine backend
 
 ## License
 

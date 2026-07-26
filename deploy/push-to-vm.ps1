@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$VmIp,
     [string]$User = "nodeos",
     [switch]$WithBitcoind,
+    [switch]$WithDatum,
     [int]$Prune = 0
 )
 
@@ -19,6 +20,7 @@ if ($LASTEXITCODE -ne 0) { exit 1 }
 
 $flags = "--binary /tmp/nodeosd-linux-amd64"
 if ($WithBitcoind) { $flags += " --with-bitcoind --prune $Prune" }
+if ($WithDatum) { $flags += " --with-datum" }
 
 ssh "${User}@${VmIp}" "sudo bash /tmp/install.sh $flags"
 if ($LASTEXITCODE -eq 0) {

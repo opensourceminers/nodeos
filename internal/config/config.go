@@ -32,6 +32,24 @@ type Alerts struct {
 	TempMaxC float64 `json:"temp_max_c"`
 }
 
+// Work configures the solo-mining work engine (DATUM Gateway supervision).
+// Runtime-mutable settings (enabled, payout address, mode) live in the store;
+// these are the static paths and ports.
+type Work struct {
+	// BinaryPath is the datum_gateway executable to supervise.
+	BinaryPath string `json:"binary_path"`
+	// StratumPort is where the gateway serves work to the miners.
+	StratumPort int `json:"stratum_port"`
+	// APIPort is the gateway's own HTTP dashboard/API port.
+	APIPort int `json:"api_port"`
+	// AdvertiseHost overrides the auto-detected LAN address that miners are
+	// pointed at when the fleet switches to the engine.
+	AdvertiseHost string `json:"advertise_host"`
+	// OceanHost/OceanPort is the upstream DATUM pool for pooled mode.
+	OceanHost string `json:"ocean_host"`
+	OceanPort int    `json:"ocean_port"`
+}
+
 type Config struct {
 	Listen          string   `json:"listen"`
 	DataDir         string   `json:"data_dir"`
@@ -42,6 +60,7 @@ type Config struct {
 	Bitcoind        Bitcoind `json:"bitcoind"`
 	Pool            Pool     `json:"pool"`
 	Alerts          Alerts   `json:"alerts"`
+	Work            Work     `json:"work"`
 }
 
 func Default() Config {
@@ -57,6 +76,13 @@ func Default() Config {
 			CookieFile: "/var/lib/bitcoind/.cookie",
 		},
 		Alerts: Alerts{TempMaxC: 70},
+		Work: Work{
+			BinaryPath:  "/usr/local/bin/datum_gateway",
+			StratumPort: 23334,
+			APIPort:     7152,
+			OceanHost:   "datum-beta1.mine.ocean.xyz",
+			OceanPort:   28915,
+		},
 	}
 }
 

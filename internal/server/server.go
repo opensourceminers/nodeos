@@ -16,6 +16,8 @@ import (
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
 	"nodeos/internal/node"
+	"nodeos/internal/store"
+	"nodeos/internal/work"
 	"nodeos/web"
 )
 
@@ -26,15 +28,16 @@ type Server struct {
 	fleet   *fleet.Manager
 	node    *node.Client
 	feed    *alerts.Feed
+	engine  *work.Engine
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
 }
 
-func New(cfg config.Config, version string, fm *fleet.Manager, nc *node.Client, feed *alerts.Feed) *Server {
+func New(cfg config.Config, version string, fm *fleet.Manager, nc *node.Client, feed *alerts.Feed, eng *work.Engine) *Server {
 	s := &Server{
 		cfg: cfg, version: version, started: time.Now(),
-		fleet: fm, node: nc, feed: feed,
+		fleet: fm, node: nc, feed: feed, engine: eng,
 		sseSubs: map[chan []byte]struct{}{},
 	}
 	fm.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
@@ -159,6 +162,49 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, s.fleet.ScanStatus())
 	})
 
+	mux.HandleFunc("GET /api/work", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"status": s.engine.Status(),
+			"log":    s.engine.LogTail(100),
+		})
+	})
+	mux.HandleFunc("PUT /api/work", func(w http.ResponseWriter, r *http.Request) {
+		var req store.WorkSettings
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if err := s.engine.UpdateSettings(r.Context(), req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		writeJSON(w, s.engine.Status())
+	})
+	mux.HandleFunc("POST /api/work/switch", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Target string `json:"target"` // "engine" | "external"
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		var err error
+		switch req.Target {
+		case "engine":
+			err = s.engine.SwitchToEngine(r.Context())
+		case "external":
+			err = s.engine.SwitchToExternal(r.Context())
+		default:
+			httpErr(w, 400, fmt.Errorf(`target must be "engine" or "external"`))
+			return
+		}
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		writeJSON(w, s.engine.Status())
+	})
+
 	mux.HandleFunc("GET /api/events", s.handleSSE)
 
 	// Embedded UI. Serve index.html for "/" and let the FS handle assets.
@@ -202,6 +248,7 @@ func (s *Server) statusPayload(histSamples int) map[string]any {
 		"fleet":     sum,
 		"node":      nst,
 		"solo":      solo,
+		"work":      s.engine.Status(),
 		"miners":    s.fleet.Miners(histSamples),
 		"scan":      s.fleet.ScanStatus(),
 	}

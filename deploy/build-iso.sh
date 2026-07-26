@@ -116,7 +116,7 @@ autoinstall:
     - |
       cat > /target/etc/systemd/system/nodeos-firstboot.service <<'UNIT'
       [Unit]
-      Description=NodeOS first boot: install Bitcoin Core
+      Description=NodeOS first boot: install Bitcoin Core + DATUM Gateway
       After=network-online.target
       Wants=network-online.target
       ConditionPathExists=!/var/lib/nodeos/.firstboot-done
@@ -124,7 +124,7 @@ autoinstall:
       [Service]
       Type=oneshot
       RemainAfterExit=yes
-      ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --prune $PRUNE
+      ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --with-datum --prune $PRUNE
       ExecStartPost=/usr/bin/touch /var/lib/nodeos/.firstboot-done
 
       [Install]

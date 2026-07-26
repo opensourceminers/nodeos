@@ -98,6 +98,54 @@
     <h2>Bitcoin Core</h2>
     <div id="node-body"><div class="empty">Checking node…</div></div>
   </div>
+
+  <div class="panel">
+    <h2>Work engine — solo mining against this node</h2>
+    <div class="work-state" id="w-state"><span class="status-chip offline"><span class="dot"></span>off</span></div>
+    <div class="note" id="w-detail"></div>
+
+    <div class="grid-2" style="margin-top:14px">
+      <div>
+        <label for="w-address">Payout address (yours — a found block pays this)</label>
+        <input id="w-address" placeholder="bc1q…">
+        <label for="w-mode">Mode</label>
+        <select id="w-mode">
+          <option value="solo">Pure solo — 100% yours, lottery odds</option>
+          <option value="ocean">OCEAN pooled (DATUM) — steady payouts, your templates</option>
+        </select>
+        <label class="check"><input type="checkbox" id="w-autoswitch" checked>
+          Auto-switch the fleet to this node once synced &amp; healthy</label>
+        <div style="margin-top:14px; display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn primary" id="w-enable">Enable work engine</button>
+          <button class="btn" id="w-save" hidden>Save changes</button>
+          <button class="btn danger" id="w-disable" hidden>Disable</button>
+        </div>
+        <div class="result-list" id="w-result"></div>
+      </div>
+      <div>
+        <dl class="kv">
+          <dt>Stratum endpoint</dt><dd id="w-endpoint">–</dd>
+          <dt>Fleet points here</dt><dd id="w-switched">no</dd>
+          <dt>Uptime</dt><dd id="w-uptime">–</dd>
+          <dt>Crashes / restarts</dt><dd id="w-restarts">0</dd>
+        </dl>
+        <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn small" id="w-point">Point fleet at engine now</button>
+          <button class="btn small" id="w-back">Switch fleet back to pool</button>
+        </div>
+        <div class="note">
+          The engine supervises OCEAN's DATUM Gateway: your node builds the block
+          templates, your miners do the work. The previous pool stays configured
+          as per-device fallback, so a gateway hiccup never idles the fleet.
+        </div>
+      </div>
+    </div>
+
+    <details style="margin-top:12px">
+      <summary class="note" style="cursor:pointer">Gateway log</summary>
+      <pre class="work-log" id="w-log">–</pre>
+    </details>
+  </div>
 </section>
 
 <!-- ============ ALERTS ============ -->
@@ -146,7 +194,11 @@
       <div class="note">
         NodeOS prototype. No authentication yet — run it on a trusted LAN or
         VLAN only. Roadmap: passkeys, WireGuard remote access, firmware
-        updates, DATUM/Stratum-V2 work engine supervision.
+        updates with staged rollout.
+      </div>
+      <div class="note">
+        Tip: a <code>{worker}</code> placeholder in the stratum worker name is
+        replaced per device with its hostname when settings are applied.
       </div>
     </div>
   </div>

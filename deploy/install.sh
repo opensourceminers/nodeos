@@ -9,6 +9,7 @@
 #   --binary PATH      path to a prebuilt nodeosd binary (default: auto-detect next to script)
 #   --from-source      build nodeosd from the repo this script lives in
 #   --with-bitcoind    install Bitcoin Core + systemd service, wire it to NodeOS
+#   --with-datum       build & install OCEAN's DATUM Gateway (solo-mining work engine)
 #   --prune MIB        bitcoind prune target in MiB (0 = full node, default 0)
 #   --listen ADDR      nodeosd listen address (default :80)
 #   --bitcoin-version V  Bitcoin Core version (default 29.0)
@@ -19,6 +20,8 @@ set -euo pipefail
 BINARY=""
 FROM_SOURCE=0
 WITH_BITCOIND=0
+WITH_DATUM=0
+DATUM_REF="master"
 PRUNE=0
 LISTEN=":80"
 BITCOIN_VERSION="29.0"
@@ -30,6 +33,8 @@ while [[ $# -gt 0 ]]; do
     --binary) BINARY="$2"; shift 2 ;;
     --from-source) FROM_SOURCE=1; shift ;;
     --with-bitcoind) WITH_BITCOIND=1; shift ;;
+    --with-datum) WITH_DATUM=1; shift ;;
+    --datum-ref) DATUM_REF="$2"; shift 2 ;;
     --prune) PRUNE="$2"; shift 2 ;;
     --listen) LISTEN="$2"; shift 2 ;;
     --bitcoin-version) BITCOIN_VERSION="$2"; shift 2 ;;
@@ -99,7 +104,13 @@ if [[ ! -f /etc/nodeos/config.json ]]; then
     "stratum_port": 21496,
     "stratum_user": "REPLACE_WITH_YOUR_BTC_ADDRESS.nodeos"
   },
-  "alerts": { "temp_max_c": 70 }
+  "alerts": { "temp_max_c": 70 },
+  "work": {
+    "binary_path": "/usr/local/bin/datum_gateway",
+    "stratum_port": 23334,
+    "api_port": 7152,
+    "advertise_host": ""
+  }
 }
 EOF
   log "wrote /etc/nodeos/config.json (edit pool.stratum_user!)"
@@ -196,6 +207,26 @@ EOF
   systemctl daemon-reload
   systemctl enable bitcoind
   [[ $NO_START -eq 1 ]] || systemctl restart bitcoind
+fi
+
+# ---------- optional: DATUM Gateway (work engine) ----------
+
+if [[ $WITH_DATUM -eq 1 ]]; then
+  log "building OCEAN DATUM Gateway ($DATUM_REF) from source"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y -qq --no-install-recommends \
+    git cmake pkgconf build-essential \
+    libcurl4-openssl-dev libjansson-dev libmicrohttpd-dev libsodium-dev
+  rm -rf /tmp/datum_gateway
+  git clone --depth 1 --branch "$DATUM_REF" \
+    https://github.com/OCEAN-xyz/datum_gateway /tmp/datum_gateway
+  (cd /tmp/datum_gateway && cmake . && make -j"$(nproc)")
+  install -m 0755 /tmp/datum_gateway/datum_gateway /usr/local/bin/datum_gateway
+  rm -rf /tmp/datum_gateway
+  log "datum_gateway installed — enable the work engine in the NodeOS web UI (Node tab)"
+  # nodeosd supervises the gateway itself (no systemd unit): it regenerates
+  # the config with fresh RPC cookie credentials on every start.
 fi
 
 # ---------- console branding ----------

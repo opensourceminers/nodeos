@@ -21,9 +21,10 @@ import (
 	"nodeos/internal/server"
 	"nodeos/internal/sim"
 	"nodeos/internal/store"
+	"nodeos/internal/work"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	var (
@@ -106,6 +107,10 @@ func main() {
 	// fleet poll loop
 	go fm.Run(ctx)
 
+	// solo-mining work engine (DATUM gateway supervision + fleet auto-switch)
+	eng := work.NewEngine(cfg, st, feed, fm, nc.Status)
+	go eng.Run(ctx)
+
 	// zero-click discovery on real installs
 	if !cfg.Demo && !*noScan {
 		if cidr, err := fm.StartScan(cfg.ScanCIDR); err == nil {
@@ -115,7 +120,7 @@ func main() {
 		}
 	}
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: server.New(cfg, version, fm, nc, feed).Handler()}
+	srv := &http.Server{Addr: cfg.Listen, Handler: server.New(cfg, version, fm, nc, feed, eng).Handler()}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
