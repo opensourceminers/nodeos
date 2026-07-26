@@ -188,16 +188,27 @@ menuentry "Debian installer (manual, expert)" {
 EOF
 
 log "patching BIOS boot menu (isolinux)"
-if [[ -f "$WORK/iso/isolinux/txt.cfg" ]]; then
-  cat > "$WORK/iso/isolinux/txt.cfg" <<EOF
-default nodeos
+if [[ -d "$WORK/iso/isolinux" ]]; then
+  # Replace Debian's whole menu tree (menu.cfg pulls in "Graphical install"
+  # as menu default) with a self-contained config: NodeOS is the default and
+  # boots automatically after 3 s — same behaviour as the UEFI grub menu.
+  cat > "$WORK/iso/isolinux/isolinux.cfg" <<EOF
+ui vesamenu.c32
+prompt 0
+timeout 30
+
+menu title NodeOS Installer
+menu tabmsg Press ENTER to start now, TAB to edit
 label nodeos
-	menu label ^Install NodeOS  (WIPES the first disk!)
+	menu label Install NodeOS  (WIPES the first disk!)
+	menu default
 	kernel /install.amd/vmlinuz
 	append $BOOT_ARGS vga=788 initrd=/install.amd/initrd.gz --- quiet
+label expert
+	menu label Debian installer (manual, expert)
+	kernel /install.amd/vmlinuz
+	append vga=788 initrd=/install.amd/initrd.gz ---
 EOF
-  # 1/10 s units; boot into the installer after 3 s
-  sed -i 's/^timeout .*/timeout 30/' "$WORK/iso/isolinux/isolinux.cfg" || true
 fi
 
 # ---------- repack ----------
