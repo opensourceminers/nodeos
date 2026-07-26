@@ -89,6 +89,25 @@
     </div>
   </div>
 
+  <div class="panel map-panel">
+    <div class="panel-head">
+      <h2>Your node in the network</h2>
+      <span class="badge" id="map-note">offline lookup</span>
+      <button class="btn small" id="map-refresh" style="margin-left:auto">Refresh</button>
+    </div>
+    <div class="map-wrap">
+      <svg id="peer-map" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet"
+           role="img" aria-label="World map with the node and its peers"></svg>
+      <div class="map-zoom">
+        <button id="map-zin" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="map-zout" title="Zoom out" aria-label="Zoom out">−</button>
+        <button id="map-zreset" title="Reset view" aria-label="Reset view">⌂</button>
+      </div>
+      <div class="chart-tooltip" id="map-tooltip"></div>
+      <div class="map-legend" id="map-legend"></div>
+    </div>
+  </div>
+
   <div class="tiles" id="tiles"></div>
 
   <div class="panel">
@@ -103,13 +122,8 @@
 
   <div class="grid-2">
     <div class="panel">
-      <h2>Solo odds — the honest numbers</h2>
+      <h2>Solo odds</h2>
       <div id="solo-body"><div class="empty">Waiting for node difficulty…</div></div>
-      <div class="honesty">
-        Solo mining is a lottery: every share is a ticket, the expected time is a
-        statistical average — a block can come in ten minutes or never. NodeOS
-        shows real odds instead of hiding them.
-      </div>
     </div>
     <div class="panel">
       <h2>Recent events</h2>
@@ -152,26 +166,6 @@
 <!-- ============ NODE ============ -->
 <section class="tab" id="tab-node">
   <div id="node-hero"></div>
-
-  <div class="panel map-panel">
-    <div class="panel-head">
-      <h2>Peer map</h2>
-      <span class="badge" id="map-note">offline lookup</span>
-      <button class="btn small" id="map-refresh" style="margin-left:auto">Refresh</button>
-    </div>
-    <div class="map-wrap">
-      <svg id="peer-map" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet"
-           role="img" aria-label="World map with the node and its peers"></svg>
-      <div class="map-zoom">
-        <button id="map-zin" title="Zoom in" aria-label="Zoom in">+</button>
-        <button id="map-zout" title="Zoom out" aria-label="Zoom out">−</button>
-        <button id="map-zreset" title="Reset view" aria-label="Reset view">⌂</button>
-      </div>
-      <div class="chart-tooltip" id="map-tooltip"></div>
-      <div class="map-legend" id="map-legend"></div>
-    </div>
-  </div>
-
   <div class="tiles" id="node-tiles"></div>
 
   <div class="grid-2">
@@ -205,10 +199,9 @@
     <div id="cfg-body"><div class="empty">Loading settings…</div></div>
     <div class="result-list" id="cfg-result"></div>
     <div class="note">
-      NodeOS only manages the options listed here — anything else you put in
-      <code id="cfg-path">bitcoin.conf</code> stays untouched. Applying restarts
-      the node; if it refuses to come back up, the previous configuration is
-      restored automatically.
+      Manages only the keys listed here; the rest of
+      <code id="cfg-path">bitcoin.conf</code> stays untouched. A failed restart
+      rolls back automatically.
     </div>
   </div>
 
@@ -237,11 +230,8 @@
           <dt>Managed install</dt><dd id="n-helper">–</dd>
         </dl>
         <div class="note">
-          Switching implementation replaces the <code>bitcoind</code> binaries
-          (chain data is kept — Core and Knots share the same format) and
-          restarts the node. Going from pruned to full requires re-downloading
-          the chain. Downloads are checksum-verified against the vendor's
-          SHA256SUMS.
+          Chain data is kept when switching. Pruned → full re-downloads the
+          chain. Downloads verified against the vendor's SHA256SUMS.
         </div>
       </div>
     </div>
@@ -274,7 +264,7 @@
         <input id="w-address" placeholder="bc1q…">
         <label for="w-mode">Mode</label>
         <select id="w-mode">
-          <option value="solo">Pure solo — 100% yours, lottery odds</option>
+          <option value="solo">Pure solo — 100% yours</option>
           <option value="ocean">OCEAN pooled (DATUM) — steady payouts, your templates</option>
         </select>
         <label class="check"><input type="checkbox" id="w-autoswitch" checked>
@@ -296,11 +286,6 @@
         <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
           <button class="btn small" id="w-point">Point fleet at engine now</button>
           <button class="btn small" id="w-back">Switch fleet back to pool</button>
-        </div>
-        <div class="note">
-          The engine supervises OCEAN's DATUM Gateway: your node builds the block
-          templates, your miners do the work. The previous pool stays configured
-          as per-device fallback, so a gateway hiccup never idles the fleet.
         </div>
       </div>
     </div>
@@ -341,10 +326,7 @@
         <button class="btn" id="btn-pool-save">Save</button>
         <button class="btn primary" id="btn-pool-apply">Save &amp; apply to fleet</button>
       </div>
-      <div class="note">
-        Applying pushes these stratum settings to every online miner and
-        restarts it (required by AxeOS). Devices are updated one by one.
-      </div>
+      <div class="note">Apply restarts each miner, one by one. <code>{worker}</code> in the worker name is replaced per device with its hostname.</div>
       <div class="result-list" id="apply-results"></div>
     </div>
     <div class="panel">
@@ -389,13 +371,7 @@
         <dt>API</dt><dd><a href="/api/status" target="_blank">/api/status</a> · <a href="/api/miners" target="_blank">/api/miners</a> · <a href="/api/events" target="_blank">/api/events</a></dd>
       </dl>
       <div class="note">
-        NodeOS prototype. The UI is password-protected, but there is no
-        remote-access story yet — keep it on a trusted LAN or VLAN. Roadmap:
-        passkeys, WireGuard remote access, staged firmware rollouts.
-      </div>
-      <div class="note">
-        Tip: a <code>{worker}</code> placeholder in the stratum worker name is
-        replaced per device with its hostname when settings are applied.
+        Prototype — no remote-access hardening yet; keep it on a trusted LAN/VLAN.
       </div>
     </div>
   </div>

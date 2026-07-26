@@ -178,13 +178,12 @@ $("nav").addEventListener("click", (e) => {
     t.classList.toggle("active", t.id === "tab-" + btn.dataset.tab));
   $("page-title").textContent = btn.querySelector(".lbl").textContent;
   $("sidebar").classList.remove("open"); // close the drawer on mobile
-  if (btn.dataset.tab === "node" && !peersLoadedOnce) loadPeers();
   if (snapshot) render();
 });
 
-// the peer map is a living view: refresh it while the node page is visible
+// the map is the dashboard's centrepiece: keep it alive while visible
 setInterval(() => {
-  if (document.querySelector("#tab-node.active") && $("auth-overlay").hidden &&
+  if (document.querySelector("#tab-dashboard.active") && $("auth-overlay").hidden &&
       !document.hidden && peersLoadedOnce) {
     loadPeers();
   }
@@ -234,6 +233,7 @@ async function loadAll() {
   } catch {}
   refreshNodeSetup();
   loadNodeConfig();
+  loadPeers(); // the dashboard map greets the user alive, not empty
   connectSSE();
 }
 
@@ -506,12 +506,7 @@ function renderSolo() {
     return;
   }
   if (solo.syncing) {
-    const pct = (node.progress * 100).toFixed(1);
-    el.innerHTML = `<div class="empty">
-      <strong>Waiting for the node to finish syncing (${pct} %)</strong>
-      A half-synced chain reports the difficulty of years ago — odds computed
-      from it would look absurdly good. Real numbers appear at the chain tip.
-    </div>`;
+    el.innerHTML = `<div class="empty">Node syncing — ${(node.progress * 100).toFixed(1)} %</div>`;
     return;
   }
   if (!solo.expected_seconds) {
@@ -738,8 +733,7 @@ function renderNode() {
           </div>
         </div>
       </div>
-      ${syncing ? `<div class="progress" style="margin-top:16px"><div style="width:${pct.toFixed(2)}%"></div></div>
-        <div class="hero-sub">Miners keep hashing on the fallback pool until the node is ready — the switch is automatic.</div>` : ""}
+      ${syncing ? `<div class="progress" style="margin-top:16px"><div style="width:${pct.toFixed(2)}%"></div></div>` : ""}
       ${n.warnings ? `<div class="hero-sub" style="color:var(--warning)">⚠ ${esc(n.warnings)}</div>` : ""}
     </div>`;
 
@@ -777,7 +771,7 @@ function renderNode() {
       <dt>Minimum fee</dt><dd>${n.mempool_min_fee ? (n.mempool_min_fee * 1e5).toFixed(2) + " sat/vB" : "–"}</dd>
     </dl>
     ${n.mempool_max ? `<div class="bar" style="margin-top:12px"><i style="width:${memPct.toFixed(1)}%"></i></div>
-      <div class="note">Mempool ${memPct.toFixed(0)} % full — a fuller mempool means more fee income in the blocks your node builds.</div>` : ""}`;
+      <div class="note">Mempool ${memPct.toFixed(0)} % full</div>` : ""}`;
 }
 
 // ---------- peer map ----------
@@ -898,7 +892,17 @@ function renderPeerMap() {
     byCC.get(cc).push(p);
   }
 
-  const self = peerData.self ? proj(peerData.self.lat, peerData.self.lon) : null;
+  // self position: explicit coordinates, or the country of the node's own
+  // public address resolved to its centroid
+  let self = null;
+  const sf = peerData.self;
+  if (sf) {
+    if (sf.lat !== undefined && sf.lon !== undefined) self = proj(sf.lat, sf.lon);
+    else if (sf.country && COUNTRY_LATLON[sf.country]) {
+      const [la, lo] = COUNTRY_LATLON[sf.country];
+      self = proj(la, lo);
+    }
+  }
 
   let arcs = "", dots = "", packets = "";
   let i = 0;
@@ -953,25 +957,23 @@ function renderPeerMap() {
   applyMapView(); // keep the current zoom across refreshes
 
   const located = peerData.peers.length - unlocated;
-  $("map-legend").innerHTML = peerData.self ? `
-    <span><i class="key self"></i>your node · ${esc(peerData.self.zone)}</span>
+  const pinned = sf && sf.zone === "pinned";
+  $("map-legend").innerHTML = self ? `
+    <span><i class="key self"></i>your node · ${esc(sf.zone)}</span>
     <span><i class="key out"></i>outbound</span>
     <span><i class="key in"></i>inbound</span>
-    <span class="muted">${located} of ${peerData.peers.length} peers located${
-      unlocated ? ` · ${unlocated} without location (Tor / unknown)` : ""}</span>
-    <span class="muted">scroll to zoom · drag to pan</span>
-    <button class="btn small" id="map-clear" style="margin-left:auto">Reset position</button>` : `
+    <span class="muted">${located}/${peerData.peers.length} peers located${
+      unlocated ? ` · ${unlocated} Tor/unknown` : ""}</span>
+    ${pinned ? `<button class="btn small" id="map-clear" style="margin-left:auto">Auto position</button>` : ""}` : `
     <span><i class="key out"></i>outbound</span>
     <span><i class="key in"></i>inbound</span>
-    <span class="muted">${located} of ${peerData.peers.length} peers located —
-      <b style="color:var(--accent)">click the map to place your node</b> and draw its connections</span>
-    <span class="muted">scroll to zoom · drag to pan</span>`;
+    <span class="muted">${located}/${peerData.peers.length} peers located · node position unknown — click the map to set it</span>`;
 
   const clearBtn = $("map-clear");
   if (clearBtn) clearBtn.addEventListener("click", async () => {
     try {
       await api("PUT", "/api/node/location", { clear: true });
-      toast("Node position reset", "ok");
+      toast("Node position follows the public IP again", "ok");
       loadPeers();
     } catch (err) { toast(err.message, "err"); }
   });

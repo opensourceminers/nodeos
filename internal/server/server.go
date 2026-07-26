@@ -191,11 +191,14 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		resp := map[string]any{"peers": peers}
-		// where "here" is: the user's own pin wins, otherwise the system time
-		// zone's coordinates. Never a geo-IP service — that would hand a third
-		// party this node's address.
+		// where "here" is, in priority order: a manual pin, the country of the
+		// node's own public address (learned from its peers, resolved offline),
+		// the system time zone. Never a geo-IP web service — that would hand a
+		// third party this node's address.
 		if loc := s.store.Get().NodeLoc; loc != nil {
-			resp["self"] = map[string]any{"lat": loc.Lat, "lon": loc.Lon, "zone": "set manually"}
+			resp["self"] = map[string]any{"lat": loc.Lat, "lon": loc.Lon, "zone": "pinned"}
+		} else if _, cc := s.node.PublicLocation(); cc != "" {
+			resp["self"] = map[string]any{"country": cc, "zone": "via public IP · " + cc}
 		} else if lat, lon, zone, ok := geoip.LocalCoords(); ok {
 			resp["self"] = map[string]any{"lat": lat, "lon": lon, "zone": zone}
 		}

@@ -23,6 +23,26 @@ type Client struct {
 
 	mu     sync.Mutex
 	status Status
+
+	// public address cache, fed from two sources: getnetworkinfo's
+	// localaddresses and the majority of getpeerinfo's addrlocal (what the
+	// peers say they see) — the latter works immediately, even behind NAT.
+	pubMu   sync.Mutex
+	pubAddr string
+	pubCC   string
+}
+
+func (c *Client) setPublic(addr, cc string) {
+	c.pubMu.Lock()
+	c.pubAddr, c.pubCC = addr, cc
+	c.pubMu.Unlock()
+}
+
+// PublicLocation returns the cached public address and its country code.
+func (c *Client) PublicLocation() (addr, cc string) {
+	c.pubMu.Lock()
+	defer c.pubMu.Unlock()
+	return c.pubAddr, c.pubCC
 }
 
 type Status struct {
@@ -58,6 +78,11 @@ type Status struct {
 	BytesSent      int64   `json:"bytes_sent"`
 	Warnings       string  `json:"warnings,omitempty"`
 	ProtocolVer    int64   `json:"protocol_version,omitempty"`
+	// PublicAddr/PublicCountry: the node's own address as learned from its
+	// peers (getnetworkinfo.localaddresses), resolved offline — this is how
+	// the map knows where "here" is without asking anyone.
+	PublicAddr    string `json:"public_addr,omitempty"`
+	PublicCountry string `json:"public_country,omitempty"`
 }
 
 // Peer is the condensed peer view for the node page.
@@ -201,6 +226,10 @@ func (c *Client) Refresh(ctx context.Context) Status {
 		ConnIn      int          `json:"connections_in"`
 		ConnOut     int          `json:"connections_out"`
 		Warnings    flexWarnings `json:"warnings"`
+		LocalAddrs  []struct {
+			Address string `json:"address"`
+			Score   int    `json:"score"`
+		} `json:"localaddresses"`
 	}
 	if err := c.call(ctx, "getnetworkinfo", nil, &ni); err == nil {
 		st.Subversion = strings.Trim(ni.Subversion, "/")
@@ -211,7 +240,16 @@ func (c *Client) Refresh(ctx context.Context) Status {
 		if st.Warnings == "" {
 			st.Warnings = string(ni.Warnings)
 		}
+		// best-scored address that the offline table can place
+		best := -1
+		for _, la := range ni.LocalAddrs {
+			if cc := geoip.Country(la.Address); cc != "" && la.Score > best {
+				best = la.Score
+				c.setPublic(la.Address, cc)
+			}
+		}
 	}
+	st.PublicAddr, st.PublicCountry = c.PublicLocation()
 
 	var mi struct {
 		Size       int64   `json:"size"`
@@ -270,23 +308,25 @@ func (c *Client) Status() Status {
 // large and volatile for the status snapshot pushed over SSE.
 func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 	var raw []struct {
-		ID       int64   `json:"id"`
-		Addr     string  `json:"addr"`
-		Network  string  `json:"network"`
-		Subver   string  `json:"subver"`
-		Inbound  bool    `json:"inbound"`
-		PingTime float64 `json:"pingtime"`
-		BytesS   int64   `json:"bytessent"`
-		BytesR   int64   `json:"bytesrecv"`
-		ConnTime int64   `json:"conntime"`
-		Height   int64   `json:"synced_blocks"`
-		Relay    bool    `json:"relaytxes"`
+		ID        int64   `json:"id"`
+		Addr      string  `json:"addr"`
+		AddrLocal string  `json:"addrlocal"`
+		Network   string  `json:"network"`
+		Subver    string  `json:"subver"`
+		Inbound   bool    `json:"inbound"`
+		PingTime  float64 `json:"pingtime"`
+		BytesS    int64   `json:"bytessent"`
+		BytesR    int64   `json:"bytesrecv"`
+		ConnTime  int64   `json:"conntime"`
+		Height    int64   `json:"synced_blocks"`
+		Relay     bool    `json:"relaytxes"`
 	}
 	if err := c.call(ctx, "getpeerinfo", nil, &raw); err != nil {
 		return nil, err
 	}
 	now := time.Now().Unix()
 	out := make([]Peer, 0, len(raw))
+	votes := map[string]int{} // our address, as the peers see it
 	for _, p := range raw {
 		out = append(out, Peer{
 			ID: p.ID, Addr: p.Addr, Network: p.Network,
@@ -296,6 +336,22 @@ func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 			ConnectedS: now - p.ConnTime, Height: p.Height, Relay: p.Relay,
 			Country: geoip.Country(p.Addr),
 		})
+		if p.AddrLocal != "" {
+			votes[p.AddrLocal]++
+		}
+	}
+	// majority of addrlocal = our public address; private/unroutable
+	// candidates resolve to no country and drop out on their own
+	bestAddr, bestN := "", 0
+	for a, n := range votes {
+		if n > bestN {
+			bestAddr, bestN = a, n
+		}
+	}
+	if bestAddr != "" {
+		if cc := geoip.Country(bestAddr); cc != "" {
+			c.setPublic(bestAddr, cc)
+		}
 	}
 	return out, nil
 }

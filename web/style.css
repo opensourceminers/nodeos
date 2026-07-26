@@ -668,13 +668,6 @@ button.btn:disabled { opacity: 0.45; cursor: default; transform: none; }
 }
 .empty strong { color: var(--ink-2); display: block; margin-bottom: var(--s1); font-size: 14px; }
 
-.honesty {
-  border-left: 2px solid var(--series-1);
-  padding: var(--s1) 0 var(--s1) var(--s3);
-  color: var(--ink-2); font-size: 12px; line-height: 1.6;
-  margin-top: var(--s3);
-}
-
 .work-log, pre.work-log {
   background: var(--page); border: 1px solid var(--border); border-radius: var(--r-sm);
   padding: var(--s3); margin-top: var(--s2);
