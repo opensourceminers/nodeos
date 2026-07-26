@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates a NodeOS test VM on a Proxmox VE host from the Debian 12 cloud
+# Creates a NodeOS test VM on a Proxmox VE host from the Debian 13 cloud
 # image. Run this ON the Proxmox host as root:
 #
 #   bash proxmox-create-vm.sh [--vmid 9100] [--storage local-lvm] [--bridge vmbr0]
@@ -54,12 +54,12 @@ command -v qm >/dev/null || { echo "qm not found — run this on the Proxmox hos
 [[ -n "$CIPASS" ]] || CIPASS="$(openssl rand -base64 12)"
 
 IMG_DIR=/var/lib/vz/template
-IMG="$IMG_DIR/debian-12-genericcloud-amd64.qcow2"
+IMG="$IMG_DIR/debian-13-genericcloud-amd64.qcow2"
 if [[ ! -f "$IMG" ]]; then
-  echo "downloading Debian 12 cloud image..."
+  echo "downloading Debian 13 cloud image..."
   mkdir -p "$IMG_DIR"
   curl -fL -o "$IMG" \
-    "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2"
 fi
 
 echo "creating VM $VMID ($NAME) on $STORAGE, bridge $BRIDGE"

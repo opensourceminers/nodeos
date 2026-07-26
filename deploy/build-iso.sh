@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Builds the NodeOS appliance installer ISO.
 #
-# Takes the official Ubuntu 24.04 Server ISO and turns it into an unattended
-# installer: boot it from a USB stick, and the machine installs Ubuntu +
-# NodeOS on its own. On first boot with network, Bitcoin Core is installed
-# and started automatically.
+# Takes the official Debian 13 (trixie) netinst ISO and turns it into an
+# unattended installer: boot it from a USB stick, and the machine installs
+# Debian + NodeOS on its own. On first boot with network, the Bitcoin node
+# (Core or Knots) and the DATUM gateway are installed and started.
 #
 #   ############################################################
 #   #  WARNING: the resulting ISO WIPES the target machine's   #
@@ -15,10 +15,11 @@
 #   bash deploy/build-iso.sh [--binary dist/nodeosd-linux-amd64] [--out dist/nodeos-installer-amd64.iso]
 #                            [--password nodeos] [--keyboard us|de|ch] [--prune 20000]
 #                            [--node-impl core|knots]
-#                            [--iso /path/to/ubuntu-24.04-live-server-amd64.iso]
+#                            [--iso /path/to/debian-13.x.0-amd64-netinst.iso]
 #
 # Needs: xorriso curl openssl  (apt install -y xorriso curl openssl)
-# The Ubuntu ISO (~2.7 GB) is downloaded and checksum-verified unless --iso is given.
+# The Debian netinst ISO (~0.7 GB) is downloaded and checksum-verified unless
+# --iso is given. Works for BIOS/SeaBIOS and UEFI boot.
 
 set -euo pipefail
 
@@ -32,7 +33,7 @@ KEYBOARD="us"
 PRUNE=20000
 NODE_IMPL="core"
 SRC_ISO=""
-MIRROR="https://releases.ubuntu.com/noble"
+MIRROR="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,21 +58,21 @@ log() { echo -e "\033[1;34m[iso]\033[0m $*"; }
 WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null || true; rm -rf "$WORK"' EXIT
 
-# ---------- get the Ubuntu ISO ----------
+# ---------- get the Debian netinst ISO ----------
 
 if [[ -z "$SRC_ISO" ]]; then
-  log "resolving current Ubuntu 24.04 server ISO"
+  log "resolving current Debian 13 netinst ISO"
   SUMS="$(curl -fsSL "$MIRROR/SHA256SUMS")"
-  ISO_NAME="$(echo "$SUMS" | grep -o 'ubuntu-24\.04[0-9.]*-live-server-amd64\.iso' | head -1)"
-  [[ -n "$ISO_NAME" ]] || { echo "could not find live-server ISO in $MIRROR/SHA256SUMS" >&2; exit 1; }
+  ISO_NAME="$(echo "$SUMS" | grep -o 'debian-13[0-9.]*-amd64-netinst\.iso' | head -1)"
+  [[ -n "$ISO_NAME" ]] || { echo "could not find netinst ISO in $MIRROR/SHA256SUMS" >&2; exit 1; }
   SRC_ISO="$REPO_ROOT/dist/$ISO_NAME"
   if [[ ! -f "$SRC_ISO" ]]; then
-    log "downloading $ISO_NAME (~2.7 GB)"
+    log "downloading $ISO_NAME (~0.7 GB)"
     mkdir -p "$REPO_ROOT/dist"
     curl -fL -o "$SRC_ISO" "$MIRROR/$ISO_NAME"
   fi
   log "verifying checksum"
-  (cd "$(dirname "$SRC_ISO")" && echo "$SUMS" | grep " \*$ISO_NAME\$" | sha256sum --check -)
+  (cd "$(dirname "$SRC_ISO")" && echo "$SUMS" | grep "  $ISO_NAME\$" | sha256sum --check -)
 fi
 [[ -f "$SRC_ISO" ]] || { echo "ISO not found: $SRC_ISO" >&2; exit 1; }
 
@@ -81,71 +82,123 @@ log "unpacking ISO"
 xorriso -osirrox on -indev "$SRC_ISO" -extract / "$WORK/iso" >/dev/null 2>&1
 chmod -R u+w "$WORK/iso"
 
-log "injecting NodeOS payload"
-mkdir -p "$WORK/iso/nodeos" "$WORK/iso/nodeos-autoinstall"
+log "injecting NodeOS payload + preseed"
+mkdir -p "$WORK/iso/nodeos"
 cp "$BINARY" "$WORK/iso/nodeos/nodeosd-linux-amd64"
 cp "$SCRIPT_DIR/install.sh" "$WORK/iso/nodeos/install.sh"
 
+# runs inside the installed system (chroot) at the end of the installation
+cat > "$WORK/iso/nodeos/target-setup.sh" <<EOF
+#!/bin/bash
+# NodeOS target setup — executed by the Debian installer via in-target.
+set -e
+bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --no-start
+cat > /etc/systemd/system/nodeos-firstboot.service <<'UNIT'
+[Unit]
+Description=NodeOS first boot: install Bitcoin node + DATUM Gateway
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/nodeos/.firstboot-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --node-impl $NODE_IMPL --with-datum --prune $PRUNE
+ExecStartPost=/usr/bin/touch /var/lib/nodeos/.firstboot-done
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+mkdir -p /etc/systemd/system/multi-user.target.wants
+ln -sf ../nodeos-firstboot.service /etc/systemd/system/multi-user.target.wants/nodeos-firstboot.service
+EOF
+chmod 0755 "$WORK/iso/nodeos/target-setup.sh"
+
 PASSHASH="$(openssl passwd -6 "$PASSWORD")"
-: > "$WORK/iso/nodeos-autoinstall/meta-data"
-cat > "$WORK/iso/nodeos-autoinstall/user-data" <<EOF
-#cloud-config
-autoinstall:
-  version: 1
-  locale: en_US.UTF-8
-  keyboard:
-    layout: $KEYBOARD
-  identity:
-    hostname: nodeos
-    username: nodeos
-    password: '$PASSHASH'
-  ssh:
-    install-server: true
-    allow-pw: true
-  storage:
-    layout:
-      name: lvm
-  # power off when done so the installer ISO can be removed — prevents an
-  # install loop when the stick/ISO is still attached on next boot
-  shutdown: poweroff
-  packages:
-    - curl
-  late-commands:
-    - mkdir -p /target/opt/nodeos
-    - cp /cdrom/nodeos/nodeosd-linux-amd64 /target/opt/nodeos/nodeosd-linux-amd64
-    - cp /cdrom/nodeos/install.sh /target/opt/nodeos/install.sh
-    # install nodeosd itself offline; bitcoind follows on first boot (needs network)
-    - curtin in-target -- bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --no-start
-    - |
-      cat > /target/etc/systemd/system/nodeos-firstboot.service <<'UNIT'
-      [Unit]
-      Description=NodeOS first boot: install Bitcoin Core + DATUM Gateway
-      After=network-online.target
-      Wants=network-online.target
-      ConditionPathExists=!/var/lib/nodeos/.firstboot-done
+cat > "$WORK/iso/nodeos/preseed.cfg" <<EOF
+# NodeOS unattended install (Debian 13). WIPES the first disk.
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select $KEYBOARD
 
-      [Service]
-      Type=oneshot
-      RemainAfterExit=yes
-      ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --node-impl $NODE_IMPL --with-datum --prune $PRUNE
-      ExecStartPost=/usr/bin/touch /var/lib/nodeos/.firstboot-done
+d-i netcfg/choose_interface select auto
+d-i netcfg/get_hostname string nodeos
+d-i netcfg/get_domain string local
+d-i netcfg/hostname string nodeos
 
-      [Install]
-      WantedBy=multi-user.target
-      UNIT
-    - mkdir -p /target/etc/systemd/system/multi-user.target.wants
-    - ln -sf /etc/systemd/system/nodeos-firstboot.service /target/etc/systemd/system/multi-user.target.wants/nodeos-firstboot.service
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+
+d-i passwd/root-login boolean false
+d-i passwd/user-fullname string NodeOS
+d-i passwd/username string nodeos
+d-i passwd/user-password-crypted password $PASSHASH
+
+d-i clock-setup/utc boolean true
+d-i time/zone string UTC
+d-i clock-setup/ntp boolean true
+
+# partitioning: single disk, everything in one partition, no questions
+d-i partman-auto/method string regular
+d-i partman-auto/choose_recipe select atomic
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-md/device_remove_md boolean true
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+d-i apt-setup/non-free-firmware boolean true
+tasksel tasksel/first multiselect standard, ssh-server
+# avahi + libnss-mdns: the box is reachable as http://nodeos.local
+d-i pkgsel/include string curl ca-certificates avahi-daemon libnss-mdns
+popularity-contest popularity-contest/participate boolean false
+
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/bootdev string default
+
+d-i preseed/late_command string \\
+  mkdir -p /target/opt/nodeos; \\
+  cp /cdrom/nodeos/nodeosd-linux-amd64 /cdrom/nodeos/install.sh /cdrom/nodeos/target-setup.sh /target/opt/nodeos/; \\
+  in-target bash /opt/nodeos/target-setup.sh
+
+# power off when done so the installer ISO can be removed — prevents an
+# install loop when the stick/ISO is still attached on next boot
+d-i finish-install/reboot_in_progress note
+d-i debian-installer/exit/poweroff boolean true
 EOF
 
-log "patching boot config for autoinstall + NodeOS branding"
-for cfg in "$WORK/iso/boot/grub/grub.cfg" "$WORK/iso/boot/grub/loopback.cfg"; do
-  [[ -f "$cfg" ]] || continue
-  sed -i 's|---|autoinstall ds=nocloud\\;s=/cdrom/nodeos-autoinstall/ ---|' "$cfg"
-  sed -i 's/Try or Install Ubuntu Server/Install NodeOS  (WIPES the first disk!)/' "$cfg"
-  sed -i 's/Ubuntu Server with the HWE kernel/Install NodeOS  (HWE kernel, newer hardware)/' "$cfg"
-done
-# shorter timeout: boot straight into the installer
-sed -i 's/timeout=30/timeout=3/' "$WORK/iso/boot/grub/grub.cfg" || true
+# ---------- boot menus: auto-start the preseeded install ----------
+
+BOOT_ARGS="auto=true priority=critical preseed/file=/cdrom/nodeos/preseed.cfg"
+
+log "patching UEFI boot menu (grub)"
+cat > "$WORK/iso/boot/grub/grub.cfg" <<EOF
+set timeout=3
+set default=0
+menuentry "Install NodeOS  (WIPES the first disk!)" {
+    linux    /install.amd/vmlinuz $BOOT_ARGS --- quiet
+    initrd   /install.amd/initrd.gz
+}
+menuentry "Debian installer (manual, expert)" {
+    linux    /install.amd/vmlinuz
+    initrd   /install.amd/initrd.gz
+}
+EOF
+
+log "patching BIOS boot menu (isolinux)"
+if [[ -f "$WORK/iso/isolinux/txt.cfg" ]]; then
+  cat > "$WORK/iso/isolinux/txt.cfg" <<EOF
+default nodeos
+label nodeos
+	menu label ^Install NodeOS  (WIPES the first disk!)
+	kernel /install.amd/vmlinuz
+	append $BOOT_ARGS vga=788 initrd=/install.amd/initrd.gz --- quiet
+EOF
+  # 1/10 s units; boot into the installer after 3 s
+  sed -i 's/^timeout .*/timeout 30/' "$WORK/iso/isolinux/isolinux.cfg" || true
+fi
 
 # ---------- repack ----------
 
@@ -161,24 +214,26 @@ SIZE="$(du -h "$OUT" | awk '{print $1}')"
 cat <<EOF
 
 ==========================================================================
- NodeOS installer ISO ready:
+ NodeOS installer ISO ready (Debian 13 based):
    $OUT  ($SIZE)
    sha256: $SHA
 
- Write it to a USB stick (>= 4 GB), e.g.:
+ Write it to a USB stick (>= 1 GB), e.g.:
    Linux:   dd if=$OUT of=/dev/sdX bs=4M status=progress oflag=sync
    Windows: Rufus or balenaEtcher
 
- Boot the target machine from the stick.
+ Boot the target machine from the stick (BIOS or UEFI).
  !! The first disk is WIPED automatically, no questions asked !!
  The machine POWERS OFF when the install is done — remove the stick
  (or detach the ISO in Proxmox), then power it back on.
 
  After installation:
-   login:   nodeos / $PASSWORD   (change it!)
-   web UI:  http://<machine-ip>/
-   Bitcoin Core installs itself on first boot with network (prune=$PRUNE MiB).
+   web UI:  http://nodeos.local/  (or http://<machine-ip>/)
+   login:   nodeos / $PASSWORD   (SSH; change it with: passwd)
+   The web UI asks you to set its own admin password on first visit.
+   Bitcoin $NODE_IMPL installs itself on first boot with network (prune=$PRUNE MiB).
 
+ The installer needs a network connection (netinst downloads packages).
  Tip: test the ISO in a Proxmox VM first (upload as ISO, boot a fresh VM).
 ==========================================================================
 EOF

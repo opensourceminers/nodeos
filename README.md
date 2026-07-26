@@ -61,7 +61,7 @@ On the Proxmox host:
 bash deploy/proxmox-create-vm.sh --bridge vmbr0 --storage local-lvm
 ```
 
-This creates a Debian 12 cloud-init VM. Then, from your workstation
+This creates a Debian 13 cloud-init VM. Then, from your workstation
 (repo root, after `./build.sh` or `.\build.ps1`):
 
 ```bash
@@ -91,12 +91,14 @@ your existing node: NodeOS runs *alongside*, nothing gets reformatted.
 ### C. Appliance installer ISO (USB stick or Proxmox)
 
 Build a bootable ISO that installs NodeOS unattended — the Umbrel-style
-install path. Build it on any Debian/Ubuntu machine (a VM or the Proxmox
-host; needs `xorriso curl openssl` and the repo + `dist/` binary):
+install path. **Debian 13 (trixie) based**, preseeded, works on BIOS and
+UEFI; the installed box is reachable as `http://nodeos.local` via mDNS.
+Build it on any Debian/Ubuntu machine (a VM or the Proxmox host; needs
+`xorriso curl openssl` and the repo + `dist/` binary):
 
 ```bash
-bash deploy/build-iso.sh --keyboard ch --prune 20000
-# → dist/nodeos-installer-amd64.iso
+bash deploy/build-iso.sh --keyboard ch --prune 20000 --node-impl knots
+# → dist/nodeos-installer-amd64.iso  (~0.8 GB, netinst-based)
 ```
 
 **The ISO wipes the target machine's first disk without asking.** After the
