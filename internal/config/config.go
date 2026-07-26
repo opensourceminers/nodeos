@@ -32,6 +32,25 @@ type Alerts struct {
 	TempMaxC float64 `json:"temp_max_c"`
 }
 
+// Auth configures web UI authentication. Disabled is meant for development
+// (`--no-auth`); production installs always require a password.
+type Auth struct {
+	Disabled bool `json:"disabled"`
+}
+
+// Update configures self-updating from GitHub releases.
+type Update struct {
+	// Repo is the "owner/name" whose releases carry nodeosd binaries.
+	Repo string `json:"repo"`
+}
+
+// NodeSoftware holds the default versions offered when installing or
+// switching the Bitcoin node implementation.
+type NodeSoftware struct {
+	CoreVersion  string `json:"core_version"`
+	KnotsVersion string `json:"knots_version"`
+}
+
 // Work configures the solo-mining work engine (DATUM Gateway supervision).
 // Runtime-mutable settings (enabled, payout address, mode) live in the store;
 // these are the static paths and ports.
@@ -61,6 +80,9 @@ type Config struct {
 	Pool            Pool     `json:"pool"`
 	Alerts          Alerts   `json:"alerts"`
 	Work            Work     `json:"work"`
+	Auth            Auth     `json:"auth"`
+	Update          Update   `json:"update"`
+	NodeSoftware    NodeSoftware `json:"node_software"`
 }
 
 func Default() Config {
@@ -82,6 +104,11 @@ func Default() Config {
 			APIPort:     7152,
 			OceanHost:   "datum-beta1.mine.ocean.xyz",
 			OceanPort:   28915,
+		},
+		Update: Update{Repo: "opensourceminers/nodeos"},
+		NodeSoftware: NodeSoftware{
+			CoreVersion:  "29.0",
+			KnotsVersion: "29.3.knots20260508",
 		},
 	}
 }

@@ -9,17 +9,35 @@ import (
 	"io/fs"
 	"math"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"nodeos/internal/admin"
 	"nodeos/internal/alerts"
+	"nodeos/internal/auth"
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
 	"nodeos/internal/node"
 	"nodeos/internal/store"
+	"nodeos/internal/update"
 	"nodeos/internal/work"
 	"nodeos/web"
 )
+
+// Deps bundles everything the HTTP layer serves.
+type Deps struct {
+	Cfg     config.Config
+	Version string
+	Fleet   *fleet.Manager
+	Node    *node.Client
+	Feed    *alerts.Feed
+	Engine  *work.Engine
+	Auth    *auth.Manager
+	Admin   *admin.Client
+	Update  *update.Checker
+}
 
 type Server struct {
 	cfg     config.Config
@@ -29,24 +47,219 @@ type Server struct {
 	node    *node.Client
 	feed    *alerts.Feed
 	engine  *work.Engine
+	auth    *auth.Manager
+	admin   *admin.Client
+	update  *update.Checker
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
 }
 
-func New(cfg config.Config, version string, fm *fleet.Manager, nc *node.Client, feed *alerts.Feed, eng *work.Engine) *Server {
+func New(d Deps) *Server {
 	s := &Server{
-		cfg: cfg, version: version, started: time.Now(),
-		fleet: fm, node: nc, feed: feed, engine: eng,
+		cfg: d.Cfg, version: d.Version, started: time.Now(),
+		fleet: d.Fleet, node: d.Node, feed: d.Feed, engine: d.Engine,
+		auth: d.Auth, admin: d.Admin, update: d.Update,
 		sseSubs: map[chan []byte]struct{}{},
 	}
-	fm.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
-	feed.OnAlert(func(a alerts.Alert) { s.broadcast("alert", a) })
+	d.Fleet.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
+	d.Feed.OnAlert(func(a alerts.Alert) { s.broadcast("alert", a) })
 	return s
 }
 
+// publicAPI lists the endpoints reachable without a session.
+var publicAPI = map[string]bool{
+	"/api/auth/state": true,
+	"/api/auth/login": true,
+	"/api/auth/setup": true,
+}
+
+// withAuth gates every /api/* route behind the session cookie; the static
+// SPA shell stays public (it contains no data).
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && !publicAPI[r.URL.Path] {
+			if !s.auth.Authenticated(r) {
+				httpErr(w, 401, fmt.Errorf("not authenticated"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+var (
+	coreVersionRe  = regexp.MustCompile(`^\d+\.\d+(\.\d+)?$`)
+	knotsVersionRe = regexp.MustCompile(`^\d+\.\d+(\.\d+)?\.knots\d{8}$`)
+)
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// ---- auth ----
+
+	mux.HandleFunc("GET /api/auth/state", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"setup_required": s.auth.SetupRequired(),
+			"authenticated":  s.auth.Authenticated(r),
+			"disabled":       s.auth.Disabled(),
+		})
+	})
+	mux.HandleFunc("POST /api/auth/setup", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if !s.auth.SetupRequired() {
+			httpErr(w, 409, fmt.Errorf("password already set — log in instead"))
+			return
+		}
+		if err := s.auth.SetPassword(req.Password); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if err := s.auth.Login(w, req.Password); err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		s.feed.Add(alerts.Info, "auth_setup", "", "Admin password set — the web UI is now protected.")
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Password string `json:"password"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if s.auth.SetupRequired() {
+			httpErr(w, 409, fmt.Errorf("no password set yet — create one first"))
+			return
+		}
+		if err := s.auth.Login(w, req.Password); err != nil {
+			httpErr(w, 401, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+		s.auth.Logout(w, r)
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/auth/password", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Current string `json:"current"`
+			New     string `json:"new"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if !s.auth.CheckPassword(req.Current) {
+			httpErr(w, 401, fmt.Errorf("current password is wrong"))
+			return
+		}
+		if err := s.auth.SetPassword(req.New); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+
+	// ---- node software (Core/Knots, pruning) ----
+
+	mux.HandleFunc("GET /api/node/setup", func(w http.ResponseWriter, r *http.Request) {
+		nst := s.node.Status()
+		impl := "unknown"
+		if nst.Available {
+			if strings.Contains(nst.Subversion, "Knots") {
+				impl = "knots"
+			} else if strings.Contains(nst.Subversion, "Satoshi") {
+				impl = "core"
+			}
+		}
+		writeJSON(w, map[string]any{
+			"helper_available": s.admin.Available(),
+			"impl":             impl,
+			"subversion":       nst.Subversion,
+			"pruned":           nst.Pruned,
+			"core_version":     s.cfg.NodeSoftware.CoreVersion,
+			"knots_version":    s.cfg.NodeSoftware.KnotsVersion,
+			"job":              s.admin.Current(),
+		})
+	})
+	mux.HandleFunc("POST /api/node/setup", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Impl    string `json:"impl"`    // "core" | "knots"
+			Version string `json:"version"` // empty = default for impl
+			Prune   int    `json:"prune"`   // MiB; 0 = full node
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		switch req.Impl {
+		case "core":
+			if req.Version == "" {
+				req.Version = s.cfg.NodeSoftware.CoreVersion
+			}
+			if !coreVersionRe.MatchString(req.Version) {
+				httpErr(w, 400, fmt.Errorf("bad Core version %q (want e.g. 29.0)", req.Version))
+				return
+			}
+		case "knots":
+			if req.Version == "" {
+				req.Version = s.cfg.NodeSoftware.KnotsVersion
+			}
+			if !knotsVersionRe.MatchString(req.Version) {
+				httpErr(w, 400, fmt.Errorf("bad Knots version %q (want e.g. 29.3.knots20260508)", req.Version))
+				return
+			}
+		default:
+			httpErr(w, 400, fmt.Errorf(`impl must be "core" or "knots"`))
+			return
+		}
+		if req.Prune < 0 || (req.Prune > 0 && req.Prune < 550) {
+			httpErr(w, 400, fmt.Errorf("prune must be 0 (full node) or at least 550 MiB"))
+			return
+		}
+		job, err := s.admin.Start("node-install", req.Impl, req.Version, fmt.Sprint(req.Prune))
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		s.feed.Add(alerts.Info, "node_install", "",
+			fmt.Sprintf("Installing Bitcoin %s %s (prune %d MiB)…",
+				map[string]string{"core": "Core", "knots": "Knots"}[req.Impl], req.Version, req.Prune))
+		writeJSON(w, job)
+	})
+
+	// ---- self-update from GitHub releases ----
+
+	mux.HandleFunc("GET /api/update", func(w http.ResponseWriter, r *http.Request) {
+		info, err := s.update.Check(r.Context())
+		if err != nil {
+			httpErr(w, 502, err)
+			return
+		}
+		writeJSON(w, info)
+	})
+	mux.HandleFunc("POST /api/update/apply", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		job, err := s.update.Apply(ctx)
+		if err != nil {
+			httpErr(w, 502, err)
+			return
+		}
+		s.feed.Add(alerts.Info, "self_update", "",
+			"Update downloaded and verified — installing and restarting nodeosd…")
+		writeJSON(w, job)
+	})
 
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.statusPayload(60))
@@ -214,7 +427,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.Handle("GET /", http.FileServerFS(sub))
 
-	return mux
+	return s.withAuth(mux)
 }
 
 // ---- status payload ----

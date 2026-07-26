@@ -14,6 +14,7 @@
 # Run on any Debian/Ubuntu machine (the Proxmox host or a VM works):
 #   bash deploy/build-iso.sh [--binary dist/nodeosd-linux-amd64] [--out dist/nodeos-installer-amd64.iso]
 #                            [--password nodeos] [--keyboard us|de|ch] [--prune 20000]
+#                            [--node-impl core|knots]
 #                            [--iso /path/to/ubuntu-24.04-live-server-amd64.iso]
 #
 # Needs: xorriso curl openssl  (apt install -y xorriso curl openssl)
@@ -29,6 +30,7 @@ OUT="$REPO_ROOT/dist/nodeos-installer-amd64.iso"
 PASSWORD="nodeos"
 KEYBOARD="us"
 PRUNE=20000
+NODE_IMPL="core"
 SRC_ISO=""
 MIRROR="https://releases.ubuntu.com/noble"
 
@@ -39,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     --password) PASSWORD="$2"; shift 2 ;;
     --keyboard) KEYBOARD="$2"; shift 2 ;;
     --prune) PRUNE="$2"; shift 2 ;;
+    --node-impl) NODE_IMPL="$2"; shift 2 ;;
     --iso) SRC_ISO="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -124,7 +127,7 @@ autoinstall:
       [Service]
       Type=oneshot
       RemainAfterExit=yes
-      ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --with-datum --prune $PRUNE
+      ExecStart=/usr/bin/bash /opt/nodeos/install.sh --binary /opt/nodeos/nodeosd-linux-amd64 --with-bitcoind --node-impl $NODE_IMPL --with-datum --prune $PRUNE
       ExecStartPost=/usr/bin/touch /var/lib/nodeos/.firstboot-done
 
       [Install]

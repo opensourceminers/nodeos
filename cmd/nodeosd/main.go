@@ -14,17 +14,20 @@ import (
 	"syscall"
 	"time"
 
+	"nodeos/internal/admin"
 	"nodeos/internal/alerts"
+	"nodeos/internal/auth"
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
 	"nodeos/internal/node"
 	"nodeos/internal/server"
 	"nodeos/internal/sim"
 	"nodeos/internal/store"
+	"nodeos/internal/update"
 	"nodeos/internal/work"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	var (
@@ -34,6 +37,7 @@ func main() {
 		demo     = flag.Bool("demo", false, "start simulated miners (overrides config)")
 		scanCIDR = flag.String("scan-cidr", "", "subnet to scan, e.g. 192.168.1.0/24 (overrides config)")
 		noScan   = flag.Bool("no-scan", false, "skip the automatic discovery scan at startup")
+		noAuth   = flag.Bool("no-auth", false, "disable web UI authentication (development only)")
 		showVer  = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -58,6 +62,9 @@ func main() {
 	}
 	if *scanCIDR != "" {
 		cfg.ScanCIDR = *scanCIDR
+	}
+	if *noAuth {
+		cfg.Auth.Disabled = true
 	}
 
 	log.Printf("NodeOS nodeosd v%s starting (listen %s, data %s, demo %v)",
@@ -111,6 +118,13 @@ func main() {
 	eng := work.NewEngine(cfg, st, feed, fm, nc.Status)
 	go eng.Run(ctx)
 
+	authm := auth.New(st, cfg.Auth.Disabled)
+	if cfg.Auth.Disabled {
+		log.Print("WARNING: web UI authentication is DISABLED")
+	}
+	adm := admin.New(cfg.DataDir)
+	upd := update.New(cfg.Update.Repo, version, cfg.DataDir, adm)
+
 	// zero-click discovery on real installs
 	if !cfg.Demo && !*noScan {
 		if cidr, err := fm.StartScan(cfg.ScanCIDR); err == nil {
@@ -120,7 +134,10 @@ func main() {
 		}
 	}
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: server.New(cfg, version, fm, nc, feed, eng).Handler()}
+	srv := &http.Server{Addr: cfg.Listen, Handler: server.New(server.Deps{
+		Cfg: cfg, Version: version, Fleet: fm, Node: nc, Feed: feed,
+		Engine: eng, Auth: authm, Admin: adm, Update: upd,
+	}).Handler()}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

@@ -30,6 +30,13 @@ type WorkSettings struct {
 	AutoSwitch bool `json:"auto_switch"`
 }
 
+// AuthState holds the admin password hash (PBKDF2-HMAC-SHA256, hex encoded).
+type AuthState struct {
+	Salt string `json:"salt"`
+	Hash string `json:"hash"`
+	Iter int    `json:"iter"`
+}
+
 type State struct {
 	Miners []PersistedMiner `json:"miners"`
 	Pool   config.Pool      `json:"pool"`
@@ -37,6 +44,7 @@ type State struct {
 	// ExternalPool remembers the pool that was active before the fleet was
 	// switched to the work engine, so "switch back" can restore it.
 	ExternalPool *config.Pool `json:"external_pool,omitempty"`
+	Auth         *AuthState   `json:"auth,omitempty"`
 }
 
 type Store struct {
@@ -80,7 +88,8 @@ func (s *Store) saveLocked() error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	// 0600: the state now contains the password hash and pool credentials
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

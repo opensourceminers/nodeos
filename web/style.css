@@ -357,3 +357,26 @@ table.plain td {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ---- auth overlay ---- */
+
+#auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--page);
+}
+.auth-card {
+  width: min(360px, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 28px;
+  text-align: center;
+}
+.auth-card h2 { margin: 14px 0 4px; font-size: 17px; }
+.auth-card input { margin-top: 10px; text-align: center; }
+.auth-card .note { min-height: 1em; }

@@ -9,6 +9,19 @@
 </head>
 <body>
 
+<!-- ============ AUTH (login / first-run setup) ============ -->
+<div id="auth-overlay" hidden>
+  <div class="auth-card">
+    <div class="wordmark" style="font-size:24px">Node<span>OS</span></div>
+    <h2 id="auth-title">Log in</h2>
+    <p class="note" id="auth-note"></p>
+    <input type="password" id="auth-pw" placeholder="Password" autocomplete="current-password">
+    <input type="password" id="auth-pw2" placeholder="Repeat password" autocomplete="new-password" hidden>
+    <button class="btn primary" id="auth-btn" style="width:100%; margin-top:12px">Log in</button>
+    <div class="result-list" id="auth-result"></div>
+  </div>
+</div>
+
 <header>
   <div class="wordmark">Node<span>OS</span></div>
   <span class="badge" id="version">v–</span>
@@ -95,8 +108,47 @@
 <!-- ============ NODE ============ -->
 <section class="tab" id="tab-node">
   <div class="panel">
-    <h2>Bitcoin Core</h2>
+    <h2>Bitcoin node</h2>
     <div id="node-body"><div class="empty">Checking node…</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Node software</h2>
+    <div class="grid-2">
+      <div>
+        <label for="n-impl">Implementation</label>
+        <select id="n-impl">
+          <option value="core">Bitcoin Core</option>
+          <option value="knots">Bitcoin Knots</option>
+        </select>
+        <label for="n-version">Version (blank = default)</label>
+        <input id="n-version" placeholder="29.0">
+        <label for="n-prune">Prune target in MiB (0 = full node, min 550)</label>
+        <input id="n-prune" type="number" placeholder="0">
+        <div style="margin-top:14px">
+          <button class="btn primary" id="n-apply">Install / switch</button>
+        </div>
+        <div class="result-list" id="n-result"></div>
+      </div>
+      <div>
+        <dl class="kv">
+          <dt>Currently running</dt><dd id="n-current">–</dd>
+          <dt>Pruning</dt><dd id="n-pruned">–</dd>
+          <dt>Managed install</dt><dd id="n-helper">–</dd>
+        </dl>
+        <div class="note">
+          Switching implementation replaces the <code>bitcoind</code> binaries
+          (chain data is kept — Core and Knots share the same format) and
+          restarts the node. Going from pruned to full requires re-downloading
+          the chain. Downloads are checksum-verified against the vendor's
+          SHA256SUMS.
+        </div>
+      </div>
+    </div>
+    <details style="margin-top:12px" id="n-job-details" hidden>
+      <summary class="note" style="cursor:pointer">Install log</summary>
+      <pre class="work-log" id="n-job-log">–</pre>
+    </details>
   </div>
 
   <div class="panel">
@@ -182,6 +234,35 @@
         restarts it (required by AxeOS). Devices are updated one by one.
       </div>
       <div class="result-list" id="apply-results"></div>
+    </div>
+    <div class="panel">
+      <h2>Updates</h2>
+      <dl class="kv">
+        <dt>Installed</dt><dd id="u-current">–</dd>
+        <dt>Latest release</dt><dd id="u-latest">–</dd>
+      </dl>
+      <div style="margin-top:12px; display:flex; gap:10px;">
+        <button class="btn" id="u-check">Check for updates</button>
+        <button class="btn primary" id="u-apply" hidden>Install update</button>
+      </div>
+      <div class="result-list" id="u-result"></div>
+      <div class="note">
+        Updates come from GitHub releases, are SHA256-verified and installed
+        by the NodeOS admin helper, which restarts the service. The UI
+        reconnects automatically.
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Security</h2>
+      <label for="s-pw-cur">Current password</label>
+      <input type="password" id="s-pw-cur" autocomplete="current-password">
+      <label for="s-pw-new">New password (min 8 characters)</label>
+      <input type="password" id="s-pw-new" autocomplete="new-password">
+      <div style="margin-top:12px; display:flex; gap:10px;">
+        <button class="btn" id="s-pw-btn">Change password</button>
+        <button class="btn" id="s-logout">Log out</button>
+      </div>
+      <div class="result-list" id="s-pw-result"></div>
     </div>
     <div class="panel">
       <h2>About</h2>

@@ -8,11 +8,13 @@
 # Flags:
 #   --binary PATH      path to a prebuilt nodeosd binary (default: auto-detect next to script)
 #   --from-source      build nodeosd from the repo this script lives in
-#   --with-bitcoind    install Bitcoin Core + systemd service, wire it to NodeOS
+#   --with-bitcoind    install a Bitcoin node + systemd service, wire it to NodeOS
+#   --node-impl I      node implementation: core (default) or knots
 #   --with-datum       build & install OCEAN's DATUM Gateway (solo-mining work engine)
 #   --prune MIB        bitcoind prune target in MiB (0 = full node, default 0)
 #   --listen ADDR      nodeosd listen address (default :80)
 #   --bitcoin-version V  Bitcoin Core version (default 29.0)
+#   --knots-version V  Bitcoin Knots version (default 29.3.knots20260508)
 #   --no-start         install everything but do not start services
 
 set -euo pipefail
@@ -25,6 +27,8 @@ DATUM_REF="master"
 PRUNE=0
 LISTEN=":80"
 BITCOIN_VERSION="29.0"
+KNOTS_VERSION="29.3.knots20260508"
+NODE_IMPL="core"
 NO_START=0
 GO_VERSION="1.26.5"
 
@@ -38,6 +42,8 @@ while [[ $# -gt 0 ]]; do
     --prune) PRUNE="$2"; shift 2 ;;
     --listen) LISTEN="$2"; shift 2 ;;
     --bitcoin-version) BITCOIN_VERSION="$2"; shift 2 ;;
+    --knots-version) KNOTS_VERSION="$2"; shift 2 ;;
+    --node-impl) NODE_IMPL="$2"; shift 2 ;;
     --no-start) NO_START=1; shift ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -144,44 +150,48 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
 
-# ---------- optional: Bitcoin Core ----------
+# ---------- privileged admin helper (node install/switch, self-update) ----------
+# nodeosd runs unprivileged (NoNewPrivileges); privileged operations go
+# through a command-file queue in /var/lib/nodeos/admin that a root-owned
+# systemd path unit watches. This helper validates and executes the commands.
 
-if [[ $WITH_BITCOIND -eq 1 ]]; then
-  log "installing Bitcoin Core $BITCOIN_VERSION"
+log "installing nodeos-admin helper"
+cat > /usr/local/bin/nodeos-admin <<'HELPER'
+#!/usr/bin/env bash
+# NodeOS privileged helper. Runs as root, triggered by nodeos-admin.path.
+# Commands (one arg per line in <id>.cmd):
+#   node-install <core|knots> <version> <prune-MiB>
+#   self-update <version>
+set -u
+QUEUE=/var/lib/nodeos/admin
+STAGED=/var/lib/nodeos/staged/nodeosd
+
+log() { echo "[$(date +%H:%M:%S)] $*"; }
+
+ensure_node_base() {
   id -u bitcoin >/dev/null 2>&1 || useradd --system --home-dir /var/lib/bitcoind --shell /usr/sbin/nologin bitcoin
   mkdir -p /etc/bitcoin /var/lib/bitcoind
   chown bitcoin:bitcoin /var/lib/bitcoind
   chmod 750 /var/lib/bitcoind
-
-  TARBALL="bitcoin-${BITCOIN_VERSION}-${BTC_ARCH}.tar.gz"
-  cd /tmp
-  curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/${TARBALL}"
-  curl -fsSLO "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/SHA256SUMS"
-  sha256sum --check --ignore-missing SHA256SUMS
-  # NOTE: checksum only. Verifying the SHA256SUMS.asc signatures is on the
-  # roadmap; do it manually for production installs.
-  tar -xzf "$TARBALL"
-  install -m 0755 "bitcoin-${BITCOIN_VERSION}/bin/bitcoind" "bitcoin-${BITCOIN_VERSION}/bin/bitcoin-cli" /usr/local/bin/
-  rm -rf "bitcoin-${BITCOIN_VERSION}" "$TARBALL" SHA256SUMS
-
+  id -u nodeos >/dev/null 2>&1 && usermod -aG bitcoin nodeos
   if [[ ! -f /etc/bitcoin/bitcoin.conf ]]; then
-    cat > /etc/bitcoin/bitcoin.conf <<EOF
-# Managed by NodeOS installer — safe to edit.
+    cat > /etc/bitcoin/bitcoin.conf <<'CONF'
+# Managed by NodeOS — safe to edit.
 server=1
-prune=$PRUNE
+prune=0
 dbcache=1024
 rpcbind=127.0.0.1
 rpcallowip=127.0.0.1
 # cookie readable by the bitcoin group (nodeos is a member)
 rpccookieperms=group
-EOF
+CONF
     chown root:bitcoin /etc/bitcoin/bitcoin.conf
     chmod 640 /etc/bitcoin/bitcoin.conf
   fi
-
-  cat > /etc/systemd/system/bitcoind.service <<'EOF'
+  if [[ ! -f /etc/systemd/system/bitcoind.service ]]; then
+    cat > /etc/systemd/system/bitcoind.service <<'UNIT'
 [Unit]
-Description=Bitcoin Core daemon
+Description=Bitcoin daemon (managed by NodeOS)
 After=network-online.target
 Wants=network-online.target
 
@@ -201,12 +211,146 @@ PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
+UNIT
+  fi
+}
+
+set_prune() {
+  local prune="$1"
+  if grep -q '^prune=' /etc/bitcoin/bitcoin.conf; then
+    sed -i "s/^prune=.*/prune=$prune/" /etc/bitcoin/bitcoin.conf
+  else
+    echo "prune=$prune" >> /etc/bitcoin/bitcoin.conf
+  fi
+}
+
+node_install() {
+  local impl="$1" version="$2" prune="$3"
+  case "$impl" in core|knots) ;; *) log "invalid impl: $impl"; return 1 ;; esac
+  [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(\.knots[0-9]{8})?$ ]] || { log "invalid version: $version"; return 1; }
+  [[ "$prune" =~ ^[0-9]+$ ]] || { log "invalid prune: $prune"; return 1; }
+  local btc_arch
+  case "$(uname -m)" in
+    x86_64)  btc_arch=x86_64-linux-gnu ;;
+    aarch64) btc_arch=aarch64-linux-gnu ;;
+    *) log "unsupported architecture"; return 1 ;;
+  esac
+  local url sums
+  if [[ "$impl" == core ]]; then
+    [[ "$version" != *knots* ]] || { log "core version must not contain 'knots'"; return 1; }
+    url="https://bitcoincore.org/bin/bitcoin-core-$version/bitcoin-$version-$btc_arch.tar.gz"
+    sums="https://bitcoincore.org/bin/bitcoin-core-$version/SHA256SUMS"
+  else
+    [[ "$version" == *knots* ]] || { log "knots version must look like 29.3.knots20260508"; return 1; }
+    local major="${version%%.*}"
+    url="https://bitcoinknots.org/files/${major}.x/$version/bitcoin-$version-$btc_arch.tar.gz"
+    sums="https://bitcoinknots.org/files/${major}.x/$version/SHA256SUMS"
+  fi
+  local tmp
+  tmp="$(mktemp -d)" || return 1
+  log "downloading bitcoin $impl $version ($btc_arch)"
+  ( set -e
+    cd "$tmp"
+    curl -fsSLO "$url"
+    curl -fsSL "$sums" -o SHA256SUMS
+    # NOTE: checksum only; GPG signature verification is on the roadmap.
+    sha256sum --check --ignore-missing SHA256SUMS
+    tar -xzf "bitcoin-$version-$btc_arch.tar.gz"
+    install -m 0755 "bitcoin-$version/bin/bitcoind" "bitcoin-$version/bin/bitcoin-cli" /usr/local/bin/
+  ) || { log "download/verify/install failed"; rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
+  ensure_node_base
+  set_prune "$prune"
+  systemctl daemon-reload
+  systemctl enable bitcoind >/dev/null 2>&1
+  if [[ "${NODEOS_ADMIN_NO_START:-0}" != 1 ]]; then
+    log "restarting bitcoind"
+    systemctl restart bitcoind || {
+      log "bitcoind failed to start — check: journalctl -u bitcoind"
+      log "note: switching a pruned node to prune=0 requires re-downloading the chain"
+      return 1
+    }
+  fi
+  log "installed: $(/usr/local/bin/bitcoind --version 2>/dev/null | head -1)"
+}
+
+self_update() {
+  [[ -f "$STAGED" ]] || { log "no staged binary at $STAGED"; return 1; }
+  log "installing staged nodeosd and restarting"
+  install -m 0755 "$STAGED" /usr/local/bin/nodeosd
+  rm -f "$STAGED"
+  systemctl restart nodeosd
+}
+
+process_queue() {
+  shopt -s nullglob
+  local cmd id
+  for cmd in "$QUEUE"/*.cmd; do
+    id="$(basename "$cmd" .cmd)"
+    mapfile -t lines < "$cmd"
+    mv "$cmd" "$QUEUE/$id.run"
+    {
+      case "${lines[0]:-}" in
+        node-install) node_install "${lines[1]:-}" "${lines[2]:-}" "${lines[3]:-}" ;;
+        self-update)  self_update ;;
+        *) log "unknown command: ${lines[0]:-<empty>}"; false ;;
+      esac
+    } >> "$QUEUE/$id.log" 2>&1 && touch "$QUEUE/$id.done" || touch "$QUEUE/$id.fail"
+    rm -f "$QUEUE/$id.run"
+    chown nodeos:nodeos "$QUEUE/$id".* 2>/dev/null || true
+  done
+}
+
+case "${1:-}" in
+  process-queue) process_queue ;;
+  run) shift
+    case "${1:-}" in
+      node-install) shift; node_install "$@" ;;
+      self-update)  self_update ;;
+      *) echo "usage: nodeos-admin run {node-install|self-update} ..." >&2; exit 1 ;;
+    esac ;;
+  *) echo "usage: nodeos-admin {process-queue|run ...}" >&2; exit 1 ;;
+esac
+HELPER
+chmod 0755 /usr/local/bin/nodeos-admin
+
+mkdir -p /var/lib/nodeos/admin /var/lib/nodeos/staged
+chown nodeos:nodeos /var/lib/nodeos/admin /var/lib/nodeos/staged
+touch /var/lib/nodeos/admin/.helper-ready
+
+cat > /etc/systemd/system/nodeos-admin.service <<'EOF'
+[Unit]
+Description=NodeOS privileged helper (processes admin command queue)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nodeos-admin process-queue
 EOF
 
-  usermod -aG bitcoin nodeos
-  systemctl daemon-reload
-  systemctl enable bitcoind
-  [[ $NO_START -eq 1 ]] || systemctl restart bitcoind
+cat > /etc/systemd/system/nodeos-admin.path <<'EOF'
+[Unit]
+Description=Watch the NodeOS admin command queue
+
+[Path]
+PathExistsGlob=/var/lib/nodeos/admin/*.cmd
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now nodeos-admin.path >/dev/null 2>&1 || true
+
+# ---------- optional: Bitcoin node (Core or Knots) ----------
+
+if [[ $WITH_BITCOIND -eq 1 ]]; then
+  case "$NODE_IMPL" in
+    core)  NODE_VERSION="$BITCOIN_VERSION" ;;
+    knots) NODE_VERSION="$KNOTS_VERSION" ;;
+    *) echo "--node-impl must be core or knots" >&2; exit 1 ;;
+  esac
+  log "installing Bitcoin ${NODE_IMPL} ${NODE_VERSION} (prune $PRUNE MiB)"
+  NODEOS_ADMIN_NO_START=$NO_START /usr/local/bin/nodeos-admin run node-install "$NODE_IMPL" "$NODE_VERSION" "$PRUNE"
 fi
 
 # ---------- optional: DATUM Gateway (work engine) ----------

@@ -4,10 +4,11 @@
 mining fleets.** One daemon, one UI: plug in a Bitaxe, it appears
 automatically and mines against your own node.
 
-> Status: **prototype v0.2.0** — fleet management, discovery, pool control,
-> node monitoring and the DATUM work engine (solo mining against your own
-> node, with auto-switch) work today. Auth, firmware updates and the
-> flashable appliance image are next.
+> Status: **prototype v0.3.0** — fleet management, discovery, pool control,
+> node monitoring, the DATUM work engine (solo mining against your own node,
+> with auto-switch), a login-protected web UI, Core/Knots selection with
+> pruning, and self-updates from GitHub releases work today. Firmware updates
+> and the flashable appliance image are next.
 > Product thinking and full roadmap: [PRODUCT-ANALYSIS.md](PRODUCT-ANALYSIS.md).
 
 Bitcoin only. No shitcoins. No custody — NodeOS never touches private keys.
@@ -35,6 +36,17 @@ Bitcoin only. No shitcoins. No custody — NodeOS never touches private keys.
   *your* fleet hashrate and *real* network difficulty
 - **Alerts** — miner offline/online, over-temperature, and the
   share-≥-network-difficulty "possible block!" event
+- **Login-protected web UI** — first visit asks you to set an admin password
+  (PBKDF2-hashed, HttpOnly session cookie); change it under Settings.
+  `--no-auth` for development only.
+- **Core or Knots, pruned or full** — pick the node implementation and prune
+  target at install (`--node-impl knots --prune 20000`) or switch later in
+  the web UI (Node tab). Chain data is kept when switching; downloads are
+  checksum-verified against the vendor's SHA256SUMS.
+- **Self-updates from GitHub** — Settings → Updates checks the repo's
+  releases, downloads the binary, verifies it against the release's
+  SHA256SUMS and installs it via the root helper (service restarts, UI
+  reconnects). Requires the repo/releases to be publicly readable.
 - **Demo mode** — simulated fleet (real HTTP devices in-process) to try the UI
   without hardware: `nodeosd --demo`
 - **REST API + SSE** — everything the UI does is `/api/*`; automation-friendly
@@ -124,8 +136,15 @@ go run ./cmd/nodeosd --demo --listen 127.0.0.1:8080
 `GET /api/status` · `GET/POST /api/miners` · `DELETE /api/miners/{host}` ·
 `POST /api/miners/{host}/restart` · `PATCH /api/miners/{host}` (tuning) ·
 `GET/PUT /api/pool` · `POST /api/pool/apply` · `POST|GET /api/scan` ·
-`GET /api/node` · `GET/PUT /api/work` · `POST /api/work/switch` ·
+`GET /api/node` · `GET/POST /api/node/setup` (Core/Knots + prune) ·
+`GET/PUT /api/work` · `POST /api/work/switch` ·
+`GET /api/update` · `POST /api/update/apply` ·
+`/api/auth/{state,setup,login,logout,password}` ·
 `GET /api/alerts` · `GET /api/events` (SSE)
+
+All endpoints except the auth ones require a session cookie (log in via the
+web UI, or script it: `curl -c jar -X POST .../api/auth/login -d
+'{"password":"…"}'`).
 
 ## Architecture
 
@@ -140,26 +159,38 @@ internal/axeos     ESP-Miner/AxeOS REST client
 internal/fleet     discovery, polling, history, pool apply
 internal/node      bitcoind JSON-RPC status
 internal/work      work engine: DATUM gateway supervision + fleet auto-switch
+internal/auth      admin password (PBKDF2) + session cookies
+internal/admin     bridge to the root helper (command-file queue)
+internal/update    GitHub release check + staged self-update
 internal/sim       simulated miners (demo mode)
 internal/server    REST API + SSE + embedded UI
 web/               dashboard (vanilla JS, no build step)
-deploy/            installer, Proxmox VM script
+deploy/            installer, admin helper, ISO builder, Proxmox VM script
 ```
+
+Privileged operations (installing/switching bitcoind, self-update) never run
+inside nodeosd: it writes a command file to `/var/lib/nodeos/admin/`, a
+root-owned systemd **path unit** picks it up and runs `nodeos-admin`, which
+validates the arguments, executes, and reports back via log/marker files.
+nodeosd keeps full systemd hardening (`NoNewPrivileges`, `ProtectSystem`).
 
 ## Security notes (prototype!)
 
-- **No authentication yet.** Run on a trusted LAN/VLAN only, never expose to
-  the internet. Auth (passkeys) + WireGuard remote access are next.
+- The web UI is password-protected (set on first visit), but traffic is
+  plain HTTP — keep it on a trusted LAN/VLAN. HTTPS + passkeys + WireGuard
+  remote access are next.
 - NodeOS holds no keys and no funds; payout addresses live on the pool/miner.
-- Installer verifies Bitcoin Core SHA256 checksums; GPG signature verification
-  is still manual.
+- Bitcoin Core/Knots and self-update downloads are SHA256-verified; GPG/
+  release signature verification is still manual and on the roadmap.
+- Self-update needs the GitHub repo (or at least its releases) to be public;
+  while the repo is private the check reports "no releases found".
 
 ## Roadmap (next)
 
-1. Verify the DATUM work engine on real hardware (Proxmox VM + Bitaxe fleet);
-   wire `blocknotify` for instant new-block templates (polling fallback works
-   today)
-2. Auth (passkeys) + HTTPS
+1. Verify the DATUM work engine + node switching on real hardware (Proxmox
+   VM + Bitaxe fleet); wire `blocknotify` for instant new-block templates
+   (polling fallback works today)
+2. HTTPS + passkeys; release signing for self-updates
 3. Firmware updates with staged rollout (1 device → verify → fleet)
 4. **Appliance image**: preinstalled Pi 5 / x86 image (Debian base, A/B
    partitions via RAUC, signed updates) — the Umbrel/StartOS-style install path

@@ -89,9 +89,54 @@ async function api(method, path, body) {
   }
   const resp = await fetch(path, opts);
   const data = await resp.json().catch(() => ({}));
+  if (resp.status === 401 && !path.startsWith("/api/auth")) showAuth("login");
   if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
   return data;
 }
+
+// ---------- auth ----------
+
+let authMode = "login";
+
+function showAuth(mode) {
+  authMode = mode;
+  const setup = mode === "setup";
+  $("auth-title").textContent = setup ? "Welcome to NodeOS" : "Log in";
+  $("auth-note").textContent = setup
+    ? "Choose an admin password to protect this NodeOS (min 8 characters)."
+    : "";
+  $("auth-pw2").hidden = !setup;
+  $("auth-btn").textContent = setup ? "Set password & continue" : "Log in";
+  $("auth-result").innerHTML = "";
+  $("auth-overlay").hidden = false;
+  $("auth-pw").focus();
+}
+
+function hideAuth() {
+  $("auth-overlay").hidden = true;
+  $("auth-pw").value = "";
+  $("auth-pw2").value = "";
+}
+
+async function submitAuth() {
+  const pw = $("auth-pw").value;
+  try {
+    if (authMode === "setup") {
+      if (pw !== $("auth-pw2").value) throw new Error("passwords do not match");
+      await api("POST", "/api/auth/setup", { password: pw });
+    } else {
+      await api("POST", "/api/auth/login", { password: pw });
+    }
+    hideAuth();
+    loadAll();
+  } catch (err) {
+    $("auth-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+}
+
+$("auth-btn").addEventListener("click", submitAuth);
+$("auth-pw").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
+$("auth-pw2").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
 
 // ---------- tabs ----------
 
@@ -106,8 +151,11 @@ $("nav").addEventListener("click", (e) => {
 
 // ---------- live updates ----------
 
+let es = null;
+
 function connectSSE() {
-  const es = new EventSource("/api/events");
+  if (es) es.close();
+  es = new EventSource("/api/events");
   es.addEventListener("snapshot", (e) => {
     snapshot = JSON.parse(e.data);
     render();
@@ -119,11 +167,12 @@ function connectSSE() {
   });
   es.onerror = () => {
     es.close();
-    setTimeout(connectSSE, 3000);
+    es = null;
+    setTimeout(() => { if ($("auth-overlay").hidden) connectSSE(); }, 3000);
   };
 }
 
-async function bootstrap() {
+async function loadAll() {
   try { alertsLog = await api("GET", "/api/alerts"); } catch {}
   try {
     const pool = await api("GET", "/api/pool");
@@ -134,7 +183,19 @@ async function bootstrap() {
     snapshot = await api("GET", "/api/status");
     render();
   } catch {}
+  refreshNodeSetup();
   connectSSE();
+}
+
+async function bootstrap() {
+  try {
+    const st = await api("GET", "/api/auth/state");
+    if (!st.authenticated && !st.disabled) {
+      showAuth(st.setup_required ? "setup" : "login");
+      return;
+    }
+  } catch {}
+  loadAll();
 }
 
 // ---------- render ----------
@@ -537,6 +598,123 @@ setInterval(async () => {
     $("w-log").textContent = (res.log || []).join("\n") || "– no output yet –";
   } catch {}
 }, 5000);
+
+// ---------- node software (Core/Knots, pruning) ----------
+
+let nodeSetupLoaded = false;
+let nodeVersions = { core: "", knots: "" };
+
+async function refreshNodeSetup() {
+  try {
+    const d = await api("GET", "/api/node/setup");
+    nodeVersions = { core: d.core_version, knots: d.knots_version };
+    $("n-current").textContent = d.subversion || "not running";
+    $("n-pruned").textContent = d.subversion ? (d.pruned ? "pruned" : "full node") : "–";
+    $("n-helper").textContent = d.helper_available
+      ? "available" : "not installed (use deploy/install.sh)";
+    if (!nodeSetupLoaded) {
+      $("n-impl").value = d.impl === "knots" ? "knots" : "core";
+      $("n-version").placeholder = nodeVersions[$("n-impl").value] || "";
+      nodeSetupLoaded = true;
+    }
+    const job = d.job;
+    const details = $("n-job-details");
+    if (job) {
+      details.hidden = false;
+      $("n-job-log").textContent = (job.log || []).join("\n") || "…";
+      $("n-apply").disabled = job.running;
+      if (job.running) {
+        $("n-result").innerHTML = `Installing (${esc(job.name)})…`;
+      } else if (job.error) {
+        $("n-result").innerHTML = `<span class="fail">${esc(job.error)}</span>`;
+      } else if (job.ok) {
+        $("n-result").innerHTML = `<span class="ok">Done.</span>`;
+      }
+    }
+  } catch {}
+}
+
+$("n-impl").addEventListener("change", () => {
+  $("n-version").placeholder = nodeVersions[$("n-impl").value] || "";
+});
+
+$("n-apply").addEventListener("click", async () => {
+  const impl = $("n-impl").value;
+  const version = $("n-version").value.trim();
+  const prune = parseInt($("n-prune").value, 10) || 0;
+  const name = impl === "knots" ? "Bitcoin Knots" : "Bitcoin Core";
+  if (!confirm(`Install ${name} ${version || nodeVersions[impl]} (prune: ${prune || "full node"})?\n` +
+      `bitcoind restarts; chain data is kept.`)) return;
+  try {
+    await api("POST", "/api/node/setup", { impl, version, prune });
+    $("n-result").innerHTML = "Started — see install log below.";
+    setTimeout(refreshNodeSetup, 1500);
+  } catch (err) {
+    $("n-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+
+setInterval(() => {
+  if (document.querySelector("#tab-node.active") && $("auth-overlay").hidden) refreshNodeSetup();
+}, 5000);
+
+// ---------- self-update ----------
+
+$("u-check").addEventListener("click", async () => {
+  $("u-result").innerHTML = "Checking…";
+  try {
+    const d = await api("GET", "/api/update");
+    $("u-latest").textContent = d.latest ? "v" + d.latest : "–";
+    if (d.newer) {
+      $("u-apply").hidden = false;
+      $("u-result").innerHTML = `<span class="ok">Update available: v${esc(d.latest)}</span>`;
+    } else {
+      $("u-apply").hidden = true;
+      $("u-result").innerHTML = `<span class="ok">You are up to date.</span>`;
+    }
+  } catch (err) {
+    $("u-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+
+$("u-apply").addEventListener("click", async () => {
+  if (!confirm("Download, verify and install the update? nodeosd restarts briefly.")) return;
+  $("u-apply").disabled = true;
+  $("u-result").innerHTML = "Downloading and verifying…";
+  try {
+    await api("POST", "/api/update/apply");
+    $("u-result").innerHTML = "Installing — the service restarts, this page reloads automatically…";
+    const current = snapshot ? snapshot.version : "";
+    const poll = setInterval(async () => {
+      try {
+        const st = await api("GET", "/api/status");
+        if (st.version && st.version !== current) { clearInterval(poll); location.reload(); }
+      } catch {}
+    }, 3000);
+  } catch (err) {
+    $("u-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+    $("u-apply").disabled = false;
+  }
+});
+
+// ---------- security ----------
+
+$("s-pw-btn").addEventListener("click", async () => {
+  try {
+    await api("POST", "/api/auth/password", {
+      current: $("s-pw-cur").value, new: $("s-pw-new").value,
+    });
+    $("s-pw-cur").value = $("s-pw-new").value = "";
+    $("s-pw-result").innerHTML = `<span class="ok">Password changed.</span>`;
+  } catch (err) {
+    $("s-pw-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+
+$("s-logout").addEventListener("click", async () => {
+  try { await api("POST", "/api/auth/logout"); } catch {}
+  location.reload();
+});
 
 // ---------- alerts ----------
 
