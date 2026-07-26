@@ -64,6 +64,31 @@ esac
 
 log() { echo -e "\033[1;34m[nodeos]\033[0m $*"; }
 
+# A Debian netinst install leaves the installation medium in the apt sources.
+# Once the ISO/stick is gone, every apt run fails ("does not have a Release
+# file"), which breaks package installs on an otherwise healthy box. Current
+# ISOs preseed this away; this heals machines installed before that.
+disable_cdrom_sources() {
+  local f changed=0
+  for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [[ -f "$f" ]] || continue
+    if grep -qE '^[[:space:]]*deb[^#]*cdrom:' "$f"; then
+      sed -i -E 's|^([[:space:]]*deb.*cdrom:)|# \1|' "$f"
+      changed=1
+    fi
+  done
+  # deb822 format: a stanza cannot be partially commented, disable the file
+  for f in /etc/apt/sources.list.d/*.sources; do
+    [[ -f "$f" ]] || continue
+    if grep -qiE '^URIs:.*cdrom:' "$f"; then
+      mv "$f" "$f.disabled"
+      changed=1
+    fi
+  done
+  [[ $changed -eq 1 ]] && log "removed the installation medium from the apt sources"
+  return 0
+}
+
 # ---------- locate or build the binary ----------
 
 if [[ $FROM_SOURCE -eq 1 ]]; then
@@ -183,6 +208,7 @@ EOF
 if command -v apt-get >/dev/null 2>&1; then
   log "installing avahi (mDNS), smartmontools, sudo, openssh-server"
   export DEBIAN_FRONTEND=noninteractive
+  disable_cdrom_sources
   apt-get install -y -qq avahi-daemon libnss-mdns smartmontools sudo openssh-server >/dev/null 2>&1 \
     || log "package install partially failed (non-fatal)"
   systemctl enable --now ssh >/dev/null 2>&1 || true
@@ -456,6 +482,7 @@ fi
 if [[ $WITH_DATUM -eq 1 ]]; then
   log "building OCEAN DATUM Gateway ($DATUM_REF) from source"
   export DEBIAN_FRONTEND=noninteractive
+  disable_cdrom_sources
   apt-get update -qq
   apt-get install -y -qq --no-install-recommends \
     git cmake pkgconf build-essential \
