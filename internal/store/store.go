@@ -45,15 +45,6 @@ type State struct {
 	// switched to the work engine, so "switch back" can restore it.
 	ExternalPool *config.Pool `json:"external_pool,omitempty"`
 	Auth         *AuthState   `json:"auth,omitempty"`
-	// NodeLoc is where the peer map draws this machine. Defaults to the
-	// system time zone's coordinates; set by the user when that is unknown
-	// (a server on UTC) or wrong.
-	NodeLoc *NodeLocation `json:"node_location,omitempty"`
-}
-
-type NodeLocation struct {
-	Lat float64 `json:"lat"`
-	Lon float64 `json:"lon"`
 }
 
 type Store struct {

@@ -191,46 +191,15 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		resp := map[string]any{"peers": peers}
-		// where "here" is, in priority order: a manual pin, the country of the
-		// node's own public address (learned from its peers, resolved offline),
-		// the system time zone. Never a geo-IP web service — that would hand a
-		// third party this node's address.
-		if loc := s.store.Get().NodeLoc; loc != nil {
-			resp["self"] = map[string]any{"lat": loc.Lat, "lon": loc.Lon, "zone": "pinned"}
-		} else if _, cc := s.node.PublicLocation(); cc != "" {
+		// where "here" is: the country of the node's own public address
+		// (learned from its peers, resolved offline), else the system time
+		// zone. Fixed — never user-movable, and never a geo-IP web service.
+		if _, cc := s.node.PublicLocation(); cc != "" {
 			resp["self"] = map[string]any{"country": cc, "zone": "via public IP · " + cc}
 		} else if lat, lon, zone, ok := geoip.LocalCoords(); ok {
 			resp["self"] = map[string]any{"lat": lat, "lon": lon, "zone": zone}
 		}
 		writeJSON(w, resp)
-	})
-
-	mux.HandleFunc("PUT /api/node/location", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Lat   float64 `json:"lat"`
-			Lon   float64 `json:"lon"`
-			Clear bool    `json:"clear"`
-		}
-		if err := decode(r, &req); err != nil {
-			httpErr(w, 400, err)
-			return
-		}
-		if !req.Clear && (req.Lat < -90 || req.Lat > 90 || req.Lon < -180 || req.Lon > 180) {
-			httpErr(w, 400, fmt.Errorf("coordinates out of range"))
-			return
-		}
-		err := s.store.Update(func(st *store.State) {
-			if req.Clear {
-				st.NodeLoc = nil
-			} else {
-				st.NodeLoc = &store.NodeLocation{Lat: req.Lat, Lon: req.Lon}
-			}
-		})
-		if err != nil {
-			httpErr(w, 500, err)
-			return
-		}
-		writeJSON(w, map[string]bool{"ok": true})
 	})
 
 	mux.HandleFunc("GET /api/node/config", func(w http.ResponseWriter, r *http.Request) {

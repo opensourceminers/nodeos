@@ -858,20 +858,7 @@ $("peer-map").addEventListener("pointermove", (e) => {
   mapView.y = Math.max(0, Math.min(MAP_H - mapView.h, panState.y - dy));
   applyMapView();
 });
-$("peer-map").addEventListener("pointerup", async (e) => {
-  const wasDrag = panState && panState.moved;
-  panState = null;
-  if (wasDrag || e.target.closest(".peer-dot")) return;
-  // a clean click places the node — viewBox-aware, works while zoomed
-  const [mx, my] = mapPoint(e);
-  const lon = (mx / MAP_W) * 360 - 180;
-  const lat = 90 - (my / MAP_H) * 180;
-  try {
-    await api("PUT", "/api/node/location", { lat, lon });
-    toast(`Node placed at ${lat.toFixed(1)}°, ${lon.toFixed(1)}°`, "ok");
-    loadPeers();
-  } catch (err) { toast(err.message, "err"); }
-});
+$("peer-map").addEventListener("pointerup", () => { panState = null; });
 $("peer-map").addEventListener("pointercancel", () => { panState = null; });
 
 // ---- rendering ----
@@ -957,26 +944,15 @@ function renderPeerMap() {
   applyMapView(); // keep the current zoom across refreshes
 
   const located = peerData.peers.length - unlocated;
-  const pinned = sf && sf.zone === "pinned";
   $("map-legend").innerHTML = self ? `
     <span><i class="key self"></i>your node · ${esc(sf.zone)}</span>
     <span><i class="key out"></i>outbound</span>
     <span><i class="key in"></i>inbound</span>
     <span class="muted">${located}/${peerData.peers.length} peers located${
-      unlocated ? ` · ${unlocated} Tor/unknown` : ""}</span>
-    ${pinned ? `<button class="btn small" id="map-clear" style="margin-left:auto">Auto position</button>` : ""}` : `
+      unlocated ? ` · ${unlocated} Tor/unknown` : ""}</span>` : `
     <span><i class="key out"></i>outbound</span>
     <span><i class="key in"></i>inbound</span>
-    <span class="muted">${located}/${peerData.peers.length} peers located · node position unknown — click the map to set it</span>`;
-
-  const clearBtn = $("map-clear");
-  if (clearBtn) clearBtn.addEventListener("click", async () => {
-    try {
-      await api("PUT", "/api/node/location", { clear: true });
-      toast("Node position follows the public IP again", "ok");
-      loadPeers();
-    } catch (err) { toast(err.message, "err"); }
-  });
+    <span class="muted">${located}/${peerData.peers.length} peers located · node position pending (learned from peers)</span>`;
 
   svg.querySelectorAll(".peer-dot").forEach((el) => {
     el.addEventListener("mouseenter", (e) => {
@@ -998,18 +974,6 @@ $("map-refresh").addEventListener("click", loadPeers);
 
 // Placing the node by clicking the map keeps the whole feature offline: no
 // geocoder, no public-IP probe, and precise enough for a country-level map.
-$("peer-map").addEventListener("click", async (e) => {
-  const svg = $("peer-map");
-  const rect = svg.getBoundingClientRect();
-  const lon = ((e.clientX - rect.left) / rect.width) * 360 - 180;
-  const lat = 90 - ((e.clientY - rect.top) / rect.height) * 180;
-  try {
-    await api("PUT", "/api/node/location", { lat, lon });
-    toast(`Node placed at ${lat.toFixed(1)}°, ${lon.toFixed(1)}°`, "ok");
-    loadPeers();
-  } catch (err) { toast(err.message, "err"); }
-});
-
 // ---------- peers ----------
 
 $("peers-refresh").addEventListener("click", loadPeers);
