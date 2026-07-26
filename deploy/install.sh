@@ -86,6 +86,10 @@ fi
 
 log "installing nodeosd from $BINARY"
 id -u nodeos >/dev/null 2>&1 || useradd --system --home-dir /var/lib/nodeos --shell /usr/sbin/nologin nodeos
+# the bitcoin group exists from the start so nodeosd.service can reference it
+# (SupplementaryGroups) even when the node is installed later via the web UI
+getent group bitcoin >/dev/null || groupadd --system bitcoin
+usermod -aG bitcoin nodeos
 mkdir -p /etc/nodeos /var/lib/nodeos
 chown nodeos:nodeos /var/lib/nodeos
 
@@ -135,6 +139,8 @@ Wants=network-online.target
 Type=simple
 User=nodeos
 Group=nodeos
+# read access to bitcoind's RPC cookie, even when the node is installed later
+SupplementaryGroups=bitcoin
 ExecStart=/usr/local/bin/nodeosd --config /etc/nodeos/config.json
 Restart=always
 RestartSec=3
@@ -169,7 +175,8 @@ STAGED=/var/lib/nodeos/staged/nodeosd
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 ensure_node_base() {
-  id -u bitcoin >/dev/null 2>&1 || useradd --system --home-dir /var/lib/bitcoind --shell /usr/sbin/nologin bitcoin
+  getent group bitcoin >/dev/null || groupadd --system bitcoin
+  id -u bitcoin >/dev/null 2>&1 || useradd --system -g bitcoin --home-dir /var/lib/bitcoind --shell /usr/sbin/nologin bitcoin
   mkdir -p /etc/bitcoin /var/lib/bitcoind
   chown bitcoin:bitcoin /var/lib/bitcoind
   chmod 750 /var/lib/bitcoind
@@ -464,4 +471,5 @@ log "config:        /etc/nodeos/config.json"
 log "logs:          journalctl -u nodeosd -f"
 [[ $WITH_BITCOIND -eq 1 ]] && log "bitcoind logs: journalctl -u bitcoind -f (initial sync takes hours/days; prune=$PRUNE)"
 log "NodeOS scans your subnet for Bitaxe/NerdAxe/NerdQAxe miners at startup."
-log "SECURITY: no auth yet — keep this on a trusted LAN/VLAN."
+log "First visit to the web UI asks you to set the admin password."
+log "SECURITY: traffic is plain HTTP for now — keep it on a trusted LAN/VLAN."
