@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"nodeos/internal/server"
 	"nodeos/internal/sim"
 	"nodeos/internal/store"
+	"nodeos/internal/tlscert"
 	"nodeos/internal/update"
 	"nodeos/internal/work"
 )
@@ -134,15 +136,47 @@ func main() {
 		}
 	}
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: server.New(server.Deps{
+	handler := server.New(server.Deps{
 		Cfg: cfg, Version: version, Fleet: fm, Node: nc, Feed: feed,
 		Engine: eng, Auth: authm, Admin: adm, Update: upd,
-	}).Handler()}
+	}).Handler()
+
+	srv := &http.Server{Addr: cfg.Listen, Handler: handler}
+
+	// HTTPS with a self-signed certificate; failure to bind (e.g. no
+	// privileges in dev) degrades to HTTP-only with a warning.
+	var tlsSrv *http.Server
+	if cfg.TLS.Enabled {
+		certPath, keyPath := cfg.TLS.CertFile, cfg.TLS.KeyFile
+		var err error
+		if certPath == "" || keyPath == "" {
+			certPath, keyPath, err = tlscert.Ensure(cfg.DataDir, nil)
+		}
+		if err == nil {
+			var tc *tls.Config
+			if tc, err = tlscert.Config(certPath, keyPath); err == nil {
+				tlsSrv = &http.Server{Addr: cfg.TLS.Listen, Handler: handler, TLSConfig: tc}
+				go func() {
+					log.Printf("https ready on %s (self-signed)", cfg.TLS.Listen)
+					if err := tlsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+						log.Printf("WARNING: https listener failed (%v) — continuing HTTP-only", err)
+					}
+				}()
+			}
+		}
+		if err != nil {
+			log.Printf("WARNING: TLS setup failed (%v) — continuing HTTP-only", err)
+		}
+	}
+
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
+		if tlsSrv != nil {
+			tlsSrv.Shutdown(shutdownCtx)
+		}
 	}()
 
 	log.Printf("web UI ready on %s", cfg.Listen)

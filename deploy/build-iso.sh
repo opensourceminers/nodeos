@@ -228,7 +228,8 @@ cat <<EOF
  (or detach the ISO in Proxmox), then power it back on.
 
  After installation:
-   web UI:  http://nodeos.local/  (or http://<machine-ip>/)
+   web UI:  https://nodeos.local/  (self-signed cert — accept the warning)
+            or http://nodeos.local/ / http://<machine-ip>/
    login:   nodeos / $PASSWORD   (SSH; change it with: passwd)
    The web UI asks you to set its own admin password on first visit.
    Bitcoin $NODE_IMPL installs itself on first boot with network (prune=$PRUNE MiB).

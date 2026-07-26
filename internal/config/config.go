@@ -32,6 +32,16 @@ type Alerts struct {
 	TempMaxC float64 `json:"temp_max_c"`
 }
 
+// TLS configures the HTTPS listener. A self-signed certificate is generated
+// on first start unless CertFile/KeyFile point at custom ones. HTTP on the
+// main listen address stays available (LAN scripts, miners' simplicity).
+type TLS struct {
+	Enabled  bool   `json:"enabled"`
+	Listen   string `json:"listen"`
+	CertFile string `json:"cert_file"`
+	KeyFile  string `json:"key_file"`
+}
+
 // Auth configures web UI authentication. Disabled is meant for development
 // (`--no-auth`); production installs always require a password.
 type Auth struct {
@@ -80,6 +90,7 @@ type Config struct {
 	Pool            Pool     `json:"pool"`
 	Alerts          Alerts   `json:"alerts"`
 	Work            Work     `json:"work"`
+	TLS             TLS      `json:"tls"`
 	Auth            Auth     `json:"auth"`
 	Update          Update   `json:"update"`
 	NodeSoftware    NodeSoftware `json:"node_software"`
@@ -105,6 +116,7 @@ func Default() Config {
 			OceanHost:   "datum-beta1.mine.ocean.xyz",
 			OceanPort:   28915,
 		},
+		TLS:    TLS{Enabled: true, Listen: ":443"},
 		Update: Update{Repo: "opensourceminers/nodeos"},
 		NodeSoftware: NodeSoftware{
 			CoreVersion:  "29.0",

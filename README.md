@@ -39,6 +39,10 @@ Bitcoin only. No shitcoins. No custody — NodeOS never touches private keys.
 - **Login-protected web UI** — first visit asks you to set an admin password
   (PBKDF2-hashed, HttpOnly session cookie); change it under Settings.
   `--no-auth` for development only.
+- **HTTPS + `nodeos.local`** — a self-signed certificate (SANs for hostname,
+  `.local` name and LAN IPs) is generated on first start and served on
+  `:443`; avahi/mDNS makes the box reachable as `https://<hostname>.local/`.
+  HTTP on `:80` stays available for LAN scripts.
 - **Core or Knots, pruned or full** — pick the node implementation and prune
   target at install (`--node-impl knots --prune 20000`) or switch later in
   the web UI (Node tab). Chain data is kept when switching; downloads are
@@ -178,9 +182,9 @@ nodeosd keeps full systemd hardening (`NoNewPrivileges`, `ProtectSystem`).
 
 ## Security notes (prototype!)
 
-- The web UI is password-protected (set on first visit), but traffic is
-  plain HTTP — keep it on a trusted LAN/VLAN. HTTPS + passkeys + WireGuard
-  remote access are next.
+- The web UI is password-protected (set on first visit) and served over
+  HTTPS with a self-signed certificate (browser warns once). Keep the box on
+  a trusted LAN/VLAN anyway; passkeys + WireGuard remote access are next.
 - NodeOS holds no keys and no funds; payout addresses live on the pool/miner.
 - Bitcoin Core/Knots and self-update downloads are SHA256-verified; GPG/
   release signature verification is still manual and on the roadmap.
@@ -192,7 +196,8 @@ nodeosd keeps full systemd hardening (`NoNewPrivileges`, `ProtectSystem`).
 1. Verify the DATUM work engine + node switching on real hardware (Proxmox
    VM + Bitaxe fleet); wire `blocknotify` for instant new-block templates
    (polling fallback works today)
-2. HTTPS + passkeys; release signing for self-updates
+2. Passkeys; release signing for self-updates; optional device-CA install
+   flow (no more browser warning)
 3. Firmware updates with staged rollout (1 device → verify → fleet)
 4. **Appliance image**: preinstalled Pi 5 / x86 image (Debian base, A/B
    partitions via RAUC, signed updates) — the Umbrel/StartOS-style install path

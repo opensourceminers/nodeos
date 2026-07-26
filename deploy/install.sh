@@ -115,6 +115,7 @@ if [[ ! -f /etc/nodeos/config.json ]]; then
     "stratum_user": "REPLACE_WITH_YOUR_BTC_ADDRESS.nodeos"
   },
   "alerts": { "temp_max_c": 70 },
+  "tls": { "enabled": true, "listen": ":443", "cert_file": "", "key_file": "" },
   "work": {
     "binary_path": "/usr/local/bin/datum_gateway",
     "stratum_port": 23334,
@@ -155,6 +156,25 @@ PrivateTmp=yes
 [Install]
 WantedBy=multi-user.target
 EOF
+
+# ---------- mDNS: reachable as http(s)://<hostname>.local ----------
+
+if command -v apt-get >/dev/null 2>&1; then
+  log "installing avahi (mDNS — reach this box as $(hostname).local)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y -qq avahi-daemon libnss-mdns >/dev/null 2>&1 || log "avahi install failed (non-fatal)"
+  mkdir -p /etc/avahi/services
+  cat > /etc/avahi/services/nodeos.service <<'EOF'
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">NodeOS on %h</name>
+  <service><type>_http._tcp</type><port>80</port></service>
+  <service><type>_https._tcp</type><port>443</port></service>
+</service-group>
+EOF
+  systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
+fi
 
 # ---------- privileged admin helper (node install/switch, self-update) ----------
 # nodeosd runs unprivileged (NoNewPrivileges); privileged operations go
@@ -402,7 +422,7 @@ cat <<'ART'
 
 ART
 printf '  %s\n\n' "$VER"
-printf '  Web UI:   http://%s/\n' "$IP"
+printf '  Web UI:   https://%s.local/  or  http://%s/\n' "$(hostname)" "$IP"
 printf '  SSH:      ssh nodeos@%s\n' "$IP"
 printf '  Login:    nodeos  (default password: nodeos - change it with: passwd)\n\n'
 } > /etc/issue
@@ -442,7 +462,7 @@ cat <<'ART'
   ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
 
 ART
-printf '  Web UI:    http://%s/\n' "$IP"
+printf '  Web UI:    https://%s.local/  or  http://%s/\n' "$(hostname)" "$IP"
 printf '  Services:  nodeosd %s · bitcoind %s\n' "$NSTAT" "$BSTAT"
 printf '  Logs:      journalctl -u nodeosd -f\n\n'
 EOF
@@ -466,10 +486,11 @@ PORT="${LISTEN##*:}"
 [[ "$PORT" == "80" ]] && URL="http://${IP:-<vm-ip>}/" || URL="http://${IP:-<vm-ip>}:${PORT}/"
 
 log "done."
-log "web UI:        $URL"
+log "web UI:        https://$(hostname).local/  (self-signed — accept the browser warning)"
+log "               $URL"
 log "config:        /etc/nodeos/config.json"
 log "logs:          journalctl -u nodeosd -f"
 [[ $WITH_BITCOIND -eq 1 ]] && log "bitcoind logs: journalctl -u bitcoind -f (initial sync takes hours/days; prune=$PRUNE)"
 log "NodeOS scans your subnet for Bitaxe/NerdAxe/NerdQAxe miners at startup."
 log "First visit to the web UI asks you to set the admin password."
-log "SECURITY: traffic is plain HTTP for now — keep it on a trusted LAN/VLAN."
+log "HTTPS uses a self-signed certificate — your browser warns once; that is expected."
