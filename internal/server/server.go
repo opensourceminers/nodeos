@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -176,6 +177,71 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})
+	})
+
+	// ---- node detail: peers & bitcoin.conf settings ----
+
+	mux.HandleFunc("GET /api/node/peers", func(w http.ResponseWriter, r *http.Request) {
+		peers, err := s.node.Peers(r.Context())
+		if err != nil {
+			httpErr(w, 502, err)
+			return
+		}
+		writeJSON(w, peers)
+	})
+
+	mux.HandleFunc("GET /api/node/config", func(w http.ResponseWriter, r *http.Request) {
+		impl := "core"
+		if strings.Contains(s.node.Status().Subversion, "Knots") {
+			impl = "knots"
+		}
+		resp := map[string]any{
+			"schema":           node.Schema(),
+			"impl":             impl,
+			"conf_file":        s.cfg.Bitcoind.ConfFile,
+			"helper_available": s.admin.Available(),
+			"job":              s.admin.Current(),
+		}
+		values, err := node.Values(s.cfg.Bitcoind.ConfFile)
+		if err != nil {
+			// no readable config (dev machine, remote node): still serve the
+			// schema so the UI can explain why editing is unavailable
+			resp["error"] = err.Error()
+			resp["values"] = map[string]string{}
+		} else {
+			resp["values"] = values
+		}
+		writeJSON(w, resp)
+	})
+
+	mux.HandleFunc("PUT /api/node/config", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]string
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		clean, err := node.ValidateSettings(req)
+		if err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if len(clean) == 0 {
+			httpErr(w, 400, fmt.Errorf("no settings to apply"))
+			return
+		}
+		args := make([]string, 0, len(clean))
+		for k, v := range clean {
+			args = append(args, k+"="+v)
+		}
+		sort.Strings(args) // deterministic job log
+		job, err := s.admin.Start("node-config", args...)
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		s.feed.Add(alerts.Info, "node_config", "",
+			fmt.Sprintf("Bitcoin node settings updated (%s) — restarting the node", strings.Join(args, ", ")))
+		writeJSON(w, job)
 	})
 
 	// ---- node software (Core/Knots, pruning) ----

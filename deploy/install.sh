@@ -398,6 +398,56 @@ node_install() {
   log "installed: $(/usr/local/bin/bitcoind --version 2>/dev/null | head -1)"
 }
 
+# node_config KEY=VALUE ...
+# Applies whitelisted bitcoin.conf settings and restarts the node. nodeosd
+# validates too, but this side must never trust it: it runs as root.
+node_config() {
+  [[ -f /etc/bitcoin/bitcoin.conf ]] || { log "no /etc/bitcoin/bitcoin.conf — install a node first"; return 1; }
+  local allowed=" prune dbcache txindex blockfilterindex coinstatsindex maxconnections listen maxuploadtarget onlynet proxy maxmempool mempoolexpiry minrelaytxfee blockmaxweight datacarrier datacarriersize permitbaremultisig "
+  local pair key val applied=0
+  cp -a /etc/bitcoin/bitcoin.conf /etc/bitcoin/bitcoin.conf.bak
+
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    val="${pair#*=}"
+    [[ "$allowed" == *" $key "* ]] || { log "rejected unknown key: $key"; return 1; }
+    # values are single tokens: digits, letters, dots, colons, slashes, dashes
+    [[ "$val" =~ ^[A-Za-z0-9._:/-]*$ ]] || { log "rejected value for $key"; return 1; }
+
+    if [[ -z "$val" ]]; then
+      # empty means "unset": drop the key so bitcoind uses its own default
+      sed -i -E "/^[[:space:]]*${key}=/d" /etc/bitcoin/bitcoin.conf
+      log "unset $key"
+    elif grep -qE "^[[:space:]]*${key}=" /etc/bitcoin/bitcoin.conf; then
+      sed -i -E "s|^[[:space:]]*${key}=.*|${key}=${val}|" /etc/bitcoin/bitcoin.conf
+      log "set $key=$val"
+    else
+      echo "${key}=${val}" >> /etc/bitcoin/bitcoin.conf
+      log "added $key=$val"
+    fi
+    applied=$((applied + 1))
+  done
+  [[ $applied -gt 0 ]] || { log "nothing to apply"; return 1; }
+
+  log "restarting bitcoind"
+  if ! systemctl restart bitcoind; then
+    log "bitcoind failed to start — restoring the previous configuration"
+    mv /etc/bitcoin/bitcoin.conf.bak /etc/bitcoin/bitcoin.conf
+    systemctl restart bitcoind || log "rollback restart also failed — check: journalctl -u bitcoind"
+    return 1
+  fi
+  # give it a moment to fail on a bad-but-parseable combination
+  sleep 5
+  if ! systemctl is-active --quiet bitcoind; then
+    log "bitcoind exited right after the change — restoring the previous configuration"
+    mv /etc/bitcoin/bitcoin.conf.bak /etc/bitcoin/bitcoin.conf
+    systemctl restart bitcoind || true
+    return 1
+  fi
+  rm -f /etc/bitcoin/bitcoin.conf.bak
+  log "settings applied"
+}
+
 self_update() {
   [[ -f "$STAGED" ]] || { log "no staged binary at $STAGED"; return 1; }
   log "installing staged nodeosd and restarting"
@@ -416,6 +466,7 @@ process_queue() {
     {
       case "${lines[0]:-}" in
         node-install) node_install "${lines[1]:-}" "${lines[2]:-}" "${lines[3]:-}" ;;
+        node-config)  node_config "${lines[@]:1}" ;;
         self-update)  self_update ;;
         *) log "unknown command: ${lines[0]:-<empty>}"; false ;;
       esac
@@ -430,8 +481,9 @@ case "${1:-}" in
   run) shift
     case "${1:-}" in
       node-install) shift; node_install "$@" ;;
+      node-config)  shift; node_config "$@" ;;
       self-update)  self_update ;;
-      *) echo "usage: nodeos-admin run {node-install|self-update} ..." >&2; exit 1 ;;
+      *) echo "usage: nodeos-admin run {node-install|node-config|self-update} ..." >&2; exit 1 ;;
     esac ;;
   *) echo "usage: nodeos-admin {process-queue|run ...}" >&2; exit 1 ;;
 esac

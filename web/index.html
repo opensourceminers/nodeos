@@ -5,14 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NodeOS</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>⛏️</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='2' y='2' width='9' height='9' rx='2.5' fill='%233987e5' opacity='.35'/><rect x='13' y='2' width='9' height='9' rx='2.5' fill='%233987e5'/><rect x='2' y='13' width='9' height='9' rx='2.5' fill='%233987e5'/><rect x='13' y='13' width='9' height='9' rx='2.5' fill='%233987e5' opacity='.35'/></svg>">
+<meta name="theme-color" content="#0d0d0d">
 </head>
 <body>
+
+<!-- reusable logo mark -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="mark" viewBox="0 0 24 24">
+  <rect x="2" y="2" width="9" height="9" rx="2.5" fill="currentColor" opacity=".32"/>
+  <rect x="13" y="2" width="9" height="9" rx="2.5" fill="currentColor"/>
+  <rect x="2" y="13" width="9" height="9" rx="2.5" fill="currentColor"/>
+  <rect x="13" y="13" width="9" height="9" rx="2.5" fill="currentColor" opacity=".32"/>
+</symbol></svg>
+
+<div id="toasts"></div>
 
 <!-- ============ AUTH (login / first-run setup) ============ -->
 <div id="auth-overlay" hidden>
   <div class="auth-card">
-    <div class="wordmark" style="font-size:24px">Node<span>OS</span></div>
+    <div class="wordmark"><svg class="mark" style="color:var(--series-1)"><use href="#mark"/></svg>Node<em>OS</em></div>
     <h2 id="auth-title">Log in</h2>
     <p class="note" id="auth-note"></p>
     <input type="password" id="auth-pw" placeholder="Password" autocomplete="current-password">
@@ -26,7 +37,7 @@
 
 <aside class="sidebar" id="sidebar">
   <div class="brand">
-    <div class="wordmark">Node<span>OS</span></div>
+    <div class="wordmark"><svg class="mark" style="color:var(--series-1)"><use href="#mark"/></svg>Node<em>OS</em></div>
     <span class="badge" id="version">v–</span>
   </div>
 
@@ -52,17 +63,38 @@
     <button class="menu-toggle" id="menu-toggle" aria-label="Menu">☰</button>
     <h1 id="page-title">Dashboard</h1>
     <span class="badge demo" id="demo-badge" hidden>DEMO — simulated fleet</span>
-    <button class="btn small" id="logout-btn" style="margin-left:auto">Log out</button>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="theme-btn" title="Switch light / dark" aria-label="Switch light / dark">◐</button>
+    <button class="btn small" id="logout-btn">Log out</button>
   </header>
 
 <main>
 
 <!-- ============ DASHBOARD ============ -->
 <section class="tab active" id="tab-dashboard">
+  <div class="hero" id="hero">
+    <div class="hero-top">
+      <div>
+        <div class="hero-label">Fleet hashrate</div>
+        <div class="hero-value" id="hero-hash">–</div>
+        <div class="hero-sub" id="hero-sub">Looking for miners…</div>
+      </div>
+      <div class="spacer" style="margin-left:auto"></div>
+      <div style="text-align:right">
+        <div class="hero-label" style="margin-bottom:8px">Work goes to</div>
+        <div class="route" id="hero-route">
+          <span class="pulse idle"></span><span class="dest">–</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="tiles" id="tiles"></div>
 
   <div class="panel">
-    <h2>Fleet hashrate — last hour</h2>
+    <div class="panel-head">
+      <h2>Fleet hashrate — last hour</h2>
+    </div>
     <div class="chart-wrap" id="fleet-chart-wrap">
       <svg id="fleet-chart" role="img" aria-label="Fleet hashrate over the last hour"></svg>
       <div class="chart-tooltip" id="fleet-tooltip"></div>
@@ -88,6 +120,13 @@
 
 <!-- ============ MINERS ============ -->
 <section class="tab" id="tab-miners">
+  <div class="toolbar">
+    <div class="seg" id="miner-view">
+      <button data-view="cards" class="active">Cards</button>
+      <button data-view="table">Table</button>
+    </div>
+  </div>
+
   <div class="panel">
     <div class="form-row">
       <div>
@@ -112,9 +151,45 @@
 
 <!-- ============ NODE ============ -->
 <section class="tab" id="tab-node">
+  <div id="node-hero"></div>
+  <div class="tiles" id="node-tiles"></div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <h2>Chain</h2>
+      <div id="node-chain"><div class="empty">Checking node…</div></div>
+    </div>
+    <div class="panel">
+      <h2>Network &amp; mempool</h2>
+      <div id="node-net"><div class="empty">Checking node…</div></div>
+    </div>
+  </div>
+
   <div class="panel">
-    <h2>Bitcoin node</h2>
-    <div id="node-body"><div class="empty">Checking node…</div></div>
+    <div class="panel-head">
+      <h2>Peers</h2>
+      <button class="btn small" id="peers-refresh" style="margin-left:auto">Load peers</button>
+    </div>
+    <div id="peers-body"><div class="empty">Peer list is fetched on demand.</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Node settings — bitcoin.conf</h2>
+      <span class="badge" id="cfg-impl"></span>
+      <div style="margin-left:auto; display:flex; gap:8px;">
+        <button class="btn small" id="cfg-reset">Discard changes</button>
+        <button class="btn small primary" id="cfg-apply" disabled>Apply &amp; restart node</button>
+      </div>
+    </div>
+    <div id="cfg-body"><div class="empty">Loading settings…</div></div>
+    <div class="result-list" id="cfg-result"></div>
+    <div class="note">
+      NodeOS only manages the options listed here — anything else you put in
+      <code id="cfg-path">bitcoin.conf</code> stays untouched. Applying restarts
+      the node; if it refuses to come back up, the previous configuration is
+      restored automatically.
+    </div>
   </div>
 
   <div class="panel">

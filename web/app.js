@@ -81,6 +81,36 @@ function timeAgo(iso) {
   return Math.floor(s / 86400) + "d ago";
 }
 
+// ---------- theme ----------
+
+(function initTheme() {
+  const saved = localStorage.getItem("nodeos-theme");
+  if (saved) document.documentElement.dataset.theme = saved;
+})();
+
+function toggleTheme() {
+  const root = document.documentElement;
+  const next = root.dataset.theme === "light" ? "dark" : "light";
+  root.dataset.theme = next;
+  localStorage.setItem("nodeos-theme", next);
+  if (snapshot) { renderFleetChart(); }
+}
+
+// ---------- toasts ----------
+
+function toast(msg, kind = "") {
+  const el = document.createElement("div");
+  el.className = "toast" + (kind ? " " + kind : "");
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => {
+    el.style.transition = "opacity 200ms, transform 200ms";
+    el.style.opacity = "0";
+    el.style.transform = "translateX(16px)";
+    setTimeout(() => el.remove(), 220);
+  }, kind === "err" ? 7000 : 4000);
+}
+
 async function api(method, path, body) {
   const opts = { method, headers: {} };
   if (body !== undefined) {
@@ -152,6 +182,7 @@ $("nav").addEventListener("click", (e) => {
 });
 
 $("menu-toggle").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+$("theme-btn").addEventListener("click", toggleTheme);
 
 $("logout-btn").addEventListener("click", async () => {
   try { await api("POST", "/api/auth/logout"); } catch {}
@@ -193,6 +224,7 @@ async function loadAll() {
     render();
   } catch {}
   refreshNodeSetup();
+  loadNodeConfig();
   connectSSE();
 }
 
@@ -212,6 +244,7 @@ async function bootstrap() {
 function render() {
   if (!snapshot) return;
   renderHeader();
+  renderHero();
   renderTiles();
   renderFleetChart();
   renderSolo();
@@ -240,41 +273,109 @@ function renderHeader() {
   }
 }
 
+// The hero answers the two questions a miner opens the page for: how much am
+// I hashing, and where is that work going.
+function renderHero() {
+  const { fleet, work, node } = snapshot;
+  const hero = $("hero");
+  const live = fleet.online > 0 && fleet.total_hash_gh > 0;
+
+  $("hero-hash").innerHTML = fmtHashParts(fleet.total_hash_gh);
+
+  let sub;
+  if (fleet.count === 0) sub = "No miners yet — run a scan on the Miners page.";
+  else if (!live) sub = `${fleet.count} miner${fleet.count > 1 ? "s" : ""} registered, none hashing right now.`;
+  else sub = `${fleet.online} of ${fleet.count} miners hashing · ${fleet.total_power_w.toFixed(0)} W` +
+    (fleet.efficiency_j_th ? ` · ${fleet.efficiency_j_th.toFixed(1)} J/TH` : "");
+  $("hero-sub").textContent = sub;
+
+  // routing: own node beats pool; that distinction is the whole product
+  const onOwnNode = !!(work && work.state === "running" && work.switched);
+  hero.classList.toggle("on-node", onOwnNode);
+  const route = $("hero-route");
+  route.className = "route" + (onOwnNode ? " own" : "");
+  const pool = poolLoaded ? `${$("p-url").value}:${$("p-port").value}` : "";
+  let dest, hint;
+  if (onOwnNode) {
+    dest = "your own node";
+    hint = work.settings && work.settings.mode === "ocean" ? "OCEAN · your templates" : "pure solo";
+  } else if (work && work.state === "waiting_node") {
+    dest = pool || "pool";
+    hint = node.available ? `own node at ${(node.progress * 100).toFixed(1)} % sync` : "waiting for node";
+  } else {
+    dest = pool || "not configured";
+    hint = work && work.state === "running" ? "engine ready — not switched" : "external pool";
+  }
+  route.innerHTML =
+    `<span class="pulse ${live ? "live" : "idle"}"></span>` +
+    `<span class="dest">${esc(dest)}</span>` +
+    `<span style="color:var(--muted);font-weight:500">${esc(hint)}</span>`;
+}
+
+const ICO = {
+  hash: "◈", miners: "⛏", power: "⚡", eff: "◇", best: "★", odds: "◔", engine: "⚙",
+  height: "▤", peers: "⇄", mempool: "≋", disk: "▣",
+};
+
+function tileHTML(t) {
+  return `
+    <div class="tile">
+      <div class="tile-head"><span class="ico">${t.i || "•"}</span>${t.l}</div>
+      <div class="value">${t.v}</div>
+      ${t.s ? `<div class="sub ${t.c || ""}">${t.s}</div>` : ""}
+    </div>`;
+}
+
 function renderTiles() {
   const { fleet, solo } = snapshot;
+  const oddsDay = solo.odds_per_day;
   const tiles = [
-    { v: fmtHashParts(fleet.total_hash_gh), l: "Fleet hashrate" },
-    { v: `${fleet.online} <small>/ ${fleet.count}</small>`, l: "Miners online" },
-    { v: `${fleet.total_power_w.toFixed(0)} <small>W</small>`, l: "Power draw" },
-    { v: fleet.efficiency_j_th ? `${fleet.efficiency_j_th.toFixed(1)} <small>J/TH</small>` : "–",
-      l: "Fleet efficiency" },
-    { v: fleet.best_diff ? esc(fleet.best_diff_str) : "–", l: "Best difficulty (all time)" },
-    { v: solo.expected_seconds ? fmtDur(solo.expected_seconds) : "–",
-      l: "Expected time to block", s: solo.expected_seconds ? "statistical average" : "needs node + hashrate" },
+    { i: ICO.miners, l: "Miners online", v: `${fleet.online} <small>/ ${fleet.count}</small>`,
+      s: fleet.count && fleet.online < fleet.count ? `${fleet.count - fleet.online} offline` : "all reachable",
+      c: fleet.count && fleet.online < fleet.count ? "warn" : "good" },
+    { i: ICO.power, l: "Power draw", v: `${fleet.total_power_w.toFixed(0)} <small>W</small>`,
+      s: fleet.total_power_w ? `${(fleet.total_power_w * 24 / 1000).toFixed(1)} kWh per day` : "" },
+    { i: ICO.eff, l: "Efficiency", v: fleet.efficiency_j_th ? `${fleet.efficiency_j_th.toFixed(1)} <small>J/TH</small>` : "–",
+      s: "measured, not spec sheet" },
+    { i: ICO.best, l: "Best share", v: fleet.best_diff ? esc(fleet.best_diff_str) : "–",
+      s: solo.network_difficulty && fleet.best_diff
+        ? `${(fleet.best_diff / solo.network_difficulty * 100).toFixed(2)} % of a block` : "all-time best" },
+    { i: ICO.odds, l: "Chance of a block", v: oddsDay ? `${(oddsDay * 100).toPrecision(2)} <small>% / day</small>` : "–",
+      s: solo.expected_seconds ? `≈ ${fmtDur(solo.expected_seconds)} on average` : "needs node + hashrate" },
     workTile(snapshot.work),
   ];
-  $("tiles").innerHTML = tiles.map((t) => `
-    <div class="tile">
-      <div class="value">${t.v}</div>
-      <div class="label">${t.l}</div>
-      ${t.s ? `<div class="sub">${t.s}</div>` : ""}
-    </div>`).join("");
+  $("tiles").innerHTML = tiles.map(tileHTML).join("");
 }
 
 function workTile(w) {
-  if (!w || w.state === "disabled" || !w.state) {
-    return { v: "off", l: "Work engine", s: "solo mining via your own node" };
+  const base = { i: ICO.engine, l: "Work engine" };
+  if (!w || !w.state || w.state === "disabled") {
+    return { ...base, v: "off", s: "solo mining via your own node" };
   }
   if (w.state === "running" && w.switched) {
-    return { v: "SOLO", l: "Work engine", s: "fleet mines on YOUR node" };
+    return { ...base, v: "SOLO", s: "fleet mines on YOUR node", c: "good" };
   }
-  if (w.state === "running") return { v: "ready", l: "Work engine", s: w.endpoint || "" };
-  return { v: esc(w.state.replace("_", " ")), l: "Work engine", s: "" };
+  if (w.state === "running") return { ...base, v: "ready", s: w.endpoint || "" };
+  if (w.state === "waiting_node") return { ...base, v: "waiting", s: "node still syncing", c: "warn" };
+  return { ...base, v: esc(w.state.replace("_", " ")), s: w.detail ? esc(w.detail.slice(0, 40)) : "" };
 }
 
 // ---------- fleet chart ----------
 
 let chartPoints = []; // [{t, gh, x, y}] in pixel space, for the tooltip
+
+// SVG cannot use CSS custom properties for stroke/fill attributes, so the
+// chart reads the current theme's tokens instead of hard-coding colours.
+const C = new Proxy({}, {
+  get(_, name) {
+    const map = {
+      series: "--series-1", grid: "--grid", muted: "--muted",
+      baseline: "--baseline", surface: "--surface", accent: "--accent",
+      good: "--good", warning: "--warning", critical: "--critical",
+    };
+    return getComputedStyle(document.documentElement).getPropertyValue(map[name] || name).trim();
+  },
+});
 
 function fleetSeries() {
   // Sum per-miner history into poll-interval buckets.
@@ -317,8 +418,8 @@ function renderFleetChart() {
     const v = (vMax / 3) * i;
     const yy = y(v);
     grid += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}"
-      stroke="#2c2c2a" stroke-width="1"/>
-      <text x="${padL - 8}" y="${yy + 4}" text-anchor="end" fill="#898781"
+      stroke="${C.grid}" stroke-width="1"/>
+      <text x="${padL - 8}" y="${yy + 4}" text-anchor="end" fill="${C.muted}"
       font-size="11">${fmtHash(v)}</text>`;
   }
   // x labels (3 ticks)
@@ -330,22 +431,28 @@ function renderFleetChart() {
           mm = String(d.getMinutes()).padStart(2, "0");
     const anchor = i === 0 ? "start" : i === 2 ? "end" : "middle";
     xlab += `<text x="${x(t)}" y="${H - 6}" text-anchor="${anchor}"
-      fill="#898781" font-size="11">${hh}:${mm}</text>`;
+      fill="${C.muted}" font-size="11">${hh}:${mm}</text>`;
   }
 
   const line = chartPoints.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join("");
   const area = line + `L${chartPoints[chartPoints.length - 1].x.toFixed(1)},${y(0)}L${chartPoints[0].x.toFixed(1)},${y(0)}Z`;
 
   svg.innerHTML = `
+    <defs>
+      <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${C.series}" stop-opacity="0.28"/>
+        <stop offset="100%" stop-color="${C.series}" stop-opacity="0.02"/>
+      </linearGradient>
+    </defs>
     ${grid}
-    <line x1="${padL}" y1="${y(0)}" x2="${W - padR}" y2="${y(0)}" stroke="#383835" stroke-width="1"/>
+    <line x1="${padL}" y1="${y(0)}" x2="${W - padR}" y2="${y(0)}" stroke="${C.baseline}" stroke-width="1"/>
     ${xlab}
-    <path d="${area}" fill="#3987e5" fill-opacity="0.12"/>
-    <path d="${line}" fill="none" stroke="#3987e5" stroke-width="2"
+    <path d="${area}" fill="url(#areaFill)"/>
+    <path d="${line}" fill="none" stroke="${C.series}" stroke-width="2"
       stroke-linejoin="round" stroke-linecap="round"/>
     <line id="crosshair" x1="0" y1="${padT}" x2="0" y2="${H - padB}"
-      stroke="#898781" stroke-width="1" stroke-dasharray="3,3" visibility="hidden"/>
-    <circle id="hoverdot" r="4" fill="#3987e5" stroke="#1a1a19" stroke-width="2"
+      stroke="${C.muted}" stroke-width="1" stroke-dasharray="3,3" visibility="hidden"/>
+    <circle id="hoverdot" r="4.5" fill="${C.series}" stroke="${C.surface}" stroke-width="2"
       visibility="hidden"/>`;
 }
 
@@ -393,13 +500,22 @@ function renderSolo() {
   }
   const oddsDay = solo.odds_per_day;
   const oneIn = oddsDay > 0 ? Math.round(1 / oddsDay) : 0;
+  // 30 pips = one month of daily draws; lit pips scale with the daily chance
+  const lit = Math.max(0, Math.min(30, Math.round(oddsDay * 30 * 30)));
   el.innerHTML = `
+    <div class="odds">
+      <span class="big">${fmtDur(solo.expected_seconds)}</span>
+      <span class="cap">expected time to a block, on average</span>
+    </div>
+    <div class="lottery" aria-hidden="true">
+      ${Array.from({ length: 30 }, (_, i) => `<i class="${i < lit ? "on" : ""}"></i>`).join("")}
+    </div>
     <dl class="kv">
-      <dt>Network difficulty</dt><dd>${fmtDiff(solo.network_difficulty)}</dd>
-      <dt>Your fleet</dt><dd>${fmtHash(fleet.total_hash_gh)}</dd>
-      <dt>Expected time to block</dt><dd><b>${fmtDur(solo.expected_seconds)}</b></dd>
       <dt>Chance in next 24 h</dt><dd>${(oddsDay * 100).toPrecision(2)} % — about 1 in ${oneIn.toLocaleString()}</dd>
-      <dt>Block reward today</dt><dd>3.125 BTC + fees</dd>
+      <dt>Your fleet</dt><dd>${fmtHash(fleet.total_hash_gh)}</dd>
+      <dt>Network difficulty</dt><dd>${fmtDiff(solo.network_difficulty)}</dd>
+      <dt>Network hashrate</dt><dd>${node.network_hashps ? fmtHash(node.network_hashps / 1e9) : "–"}</dd>
+      <dt>Block reward</dt><dd>3.125 BTC + fees</dd>
     </dl>`;
 }
 
@@ -407,53 +523,76 @@ function renderSolo() {
 
 function sparkline(history) {
   const hs = (history || []).slice(-60);
-  if (hs.length < 2) return `<div class="spark" style="height:28px"></div>`;
+  if (hs.length < 2) return `<div class="spark" style="height:30px"></div>`;
   const vals = hs.map((s) => s.h);
-  const max = Math.max(...vals) * 1.1 || 1;
-  const min = Math.min(...vals) * 0.9;
-  const W = 120, H = 28;
-  const pts = hs.map((s, i) =>
-    `${(i / (hs.length - 1)) * W},${H - ((s.h - min) / Math.max(max - min, 0.001)) * (H - 4) - 2}`
-  ).join(" ");
+  const max = Math.max(...vals) * 1.08 || 1;
+  const min = Math.min(...vals) * 0.92;
+  const W = 120, H = 30;
+  const pt = (s, i) =>
+    `${((i / (hs.length - 1)) * W).toFixed(2)},${(H - ((s.h - min) / Math.max(max - min, 0.001)) * (H - 5) - 2.5).toFixed(2)}`;
+  const line = hs.map(pt).join(" ");
   return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
-    style="width:100%;height:28px" aria-hidden="true">
-    <polyline points="${pts}" fill="none" stroke="#3987e5" stroke-width="2"
-      stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+    style="width:100%;height:30px" aria-hidden="true">
+    <polygon points="0,${H} ${line} ${W},${H}" fill="${C.series}" fill-opacity="0.10"/>
+    <polyline points="${line}" fill="none" stroke="${C.series}" stroke-width="1.6"
+      stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
 }
+
+// Where a device is actually sending its work — the one thing a fleet owner
+// must be able to see at a glance.
+function destination(i) {
+  if (!i.stratumURL) return { cls: "", text: "no pool configured" };
+  const target = `${i.stratumURL}:${i.stratumPort}`;
+  const engine = snapshot.work && snapshot.work.endpoint;
+  if (i.isUsingFallbackStratum) return { cls: "fallback", text: `fallback: ${target}` };
+  if (engine && target === engine) return { cls: "own", text: "your own node" };
+  return { cls: "", text: target };
+}
+
+let minerView = localStorage.getItem("nodeos-miner-view") || "cards";
+
+function tempClass(t) { return t >= 68 ? "hot" : t >= 60 ? "warn" : ""; }
 
 function renderMiners() {
   const miners = snapshot.miners || [];
   $("miners-empty").hidden = miners.length > 0;
+  document.querySelectorAll("#miner-view button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === minerView));
+
   const grid = $("miner-grid");
+  if (minerView === "table") {
+    grid.className = "";
+    grid.innerHTML = minerTable(miners);
+    return;
+  }
+  grid.className = "miner-grid";
   grid.innerHTML = miners.map((m) => {
     const i = m.info || {};
-    const status = m.online
-      ? `<span class="status-chip online"><span class="dot"></span>online</span>`
-      : `<span class="status-chip offline"><span class="dot"></span>offline</span>`;
-    const pool = i.stratumURL
-      ? `${esc(i.stratumURL)}:${i.stratumPort}${i.isUsingFallbackStratum ? " (FALLBACK!)" : ""}`
-      : "–";
+    const dest = destination(i);
+    const tc = tempClass(i.temp || 0);
+    const tempPct = Math.min(100, ((i.temp || 0) / 80) * 100);
     return `
-    <div class="miner-card" data-host="${esc(m.host)}">
+    <div class="miner-card ${m.online ? "" : "offline"}" data-host="${esc(m.host)}">
       <div class="top">
         <span class="name">${esc(m.label)}</span>
         <span class="model">${esc(i.ASICModel || m.source)}</span>
-        ${status}
+        <span class="status-chip ${m.online ? "online" : "offline"}"><span class="dot"></span>${m.online ? "online" : "offline"}</span>
       </div>
       <div class="hash">${m.online ? fmtHashParts(i.hashRate || 0) : "–"}</div>
       ${sparkline(m.history)}
-      <div class="meta">
-        <span>Temp <b>${i.temp ? i.temp.toFixed(0) + " °C" : "–"}</b></span>
-        <span>Power <b>${i.power ? i.power.toFixed(1) + " W" : "–"}</b></span>
-        <span>Fan <b>${i.fanrpm ? i.fanrpm.toFixed(0) + " rpm" : "–"}</b></span>
-        <span>Freq <b>${i.frequency ? i.frequency + " MHz" : "–"}</b></span>
-        <span>Shares <b>${(i.sharesAccepted ?? 0).toLocaleString()}</b>${i.sharesRejected ? ` <span style="color:var(--muted)">(${i.sharesRejected} rej)</span>` : ""}</span>
-        <span>Best <b>${esc(i.bestDiff || "–")}</b></span>
-        <span>Uptime <b>${fmtUptime(i.uptimeSeconds)}</b></span>
-        <span>FW <b>${esc(i.version || "–")}</b></span>
+      <div class="metrics">
+        <div class="metric"><span class="k">Temp</span><span class="v ${tc}">${i.temp ? i.temp.toFixed(0) + " °C" : "–"}</span></div>
+        <div class="metric"><span class="k">Power</span><span class="v">${i.power ? i.power.toFixed(1) + " W" : "–"}</span></div>
+        <div class="metric"><span class="k">Shares</span><span class="v">${(i.sharesAccepted ?? 0).toLocaleString()}${i.sharesRejected ? ` <span style="color:var(--muted)">/${i.sharesRejected}</span>` : ""}</span></div>
+        <div class="metric"><span class="k">Best</span><span class="v">${esc(i.bestDiff || "–")}</span></div>
+        <div class="metric"><span class="k">Freq</span><span class="v">${i.frequency ? i.frequency + " MHz" : "–"}</span></div>
+        <div class="metric"><span class="k">Uptime</span><span class="v">${fmtUptime(i.uptimeSeconds)}</span></div>
       </div>
-      <div class="pool-line" title="${esc(i.stratumUser || "")}">→ ${pool}</div>
-      ${m.last_error && !m.online ? `<div class="pool-line" style="color:var(--critical)">${esc(m.last_error)}</div>` : ""}
+      ${i.temp ? `<div class="bar"><i class="${tc}" style="width:${tempPct.toFixed(0)}%"></i></div>` : ""}
+      <div class="dest-line ${dest.cls}" title="${esc(i.stratumUser || "")}">
+        <span>→</span><span class="val">${esc(dest.text)}</span>
+      </div>
+      ${m.last_error && !m.online ? `<div class="dest-line" style="color:var(--critical)"><span class="val">${esc(m.last_error)}</span></div>` : ""}
       <div class="actions">
         <button class="btn small" data-act="restart">Restart</button>
         <button class="btn small danger" data-act="remove">Remove</button>
@@ -462,10 +601,47 @@ function renderMiners() {
   }).join("");
 }
 
+function minerTable(miners) {
+  if (!miners.length) return "";
+  return `<div class="panel" style="margin:0"><div class="table-wrap"><table class="plain">
+    <thead><tr>
+      <th>Miner</th><th>Model</th><th class="num">Hashrate</th><th class="num">Temp</th>
+      <th class="num">Power</th><th class="num">Shares</th><th class="num">Best</th>
+      <th>Destination</th><th></th>
+    </tr></thead>
+    <tbody>${miners.map((m) => {
+      const i = m.info || {};
+      const d = destination(i);
+      return `<tr data-host="${esc(m.host)}">
+        <td><span class="status-chip ${m.online ? "online" : "offline"}" style="margin:0"><span class="dot"></span></span>
+          ${esc(m.label)}</td>
+        <td>${esc(i.ASICModel || m.source)}</td>
+        <td class="num">${m.online ? fmtHash(i.hashRate || 0) : "–"}</td>
+        <td class="num ${tempClass(i.temp || 0)}">${i.temp ? i.temp.toFixed(0) + " °C" : "–"}</td>
+        <td class="num">${i.power ? i.power.toFixed(1) + " W" : "–"}</td>
+        <td class="num">${(i.sharesAccepted ?? 0).toLocaleString()}</td>
+        <td class="num">${esc(i.bestDiff || "–")}</td>
+        <td style="color:var(--${d.cls === "own" ? "accent" : d.cls === "fallback" ? "warning" : "muted"})">${esc(d.text)}</td>
+        <td class="num"><button class="btn small" data-act="restart">Restart</button></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table></div></div>`;
+}
+
+$("miner-view").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-view]");
+  if (!btn) return;
+  minerView = btn.dataset.view;
+  localStorage.setItem("nodeos-miner-view", minerView);
+  if (snapshot) renderMiners();
+});
+
 $("miner-grid").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-act]");
   if (!btn) return;
-  const host = btn.closest(".miner-card").dataset.host;
+  const row = btn.closest("[data-host]");
+  const host = row && row.dataset.host;
+  if (!host) return;
   try {
     if (btn.dataset.act === "restart") {
       btn.disabled = true;
@@ -479,43 +655,265 @@ $("miner-grid").addEventListener("click", async (e) => {
       renderMiners();
     }
   } catch (err) {
-    alert(err.message);
+    toast(err.message, "err");
     btn.disabled = false;
   }
 });
 
 // ---------- node ----------
 
+function ago(unix) {
+  if (!unix) return "–";
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - unix);
+  if (s < 90) return `${s} s ago`;
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 172800) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+}
+
 function renderNode() {
   const n = snapshot.node;
-  const el = $("node-body");
+
   if (!n.available) {
-    el.innerHTML = `
-      <div class="empty">
-        Bitcoin Core is not reachable${n.error ? `: <code>${esc(n.error)}</code>` : ""}.<br><br>
-        Install it with the NodeOS installer (<code>install.sh --with-bitcoind</code>)
-        or point <code>/etc/nodeos/config.json</code> at an existing node's RPC.
+    $("node-hero").innerHTML = `
+      <div class="panel">
+        <div class="empty">
+          <strong>No Bitcoin node reachable</strong>
+          ${n.error ? `<code>${esc(n.error)}</code><br><br>` : ""}
+          Install one below, or point <code>/etc/nodeos/config.json</code> at an
+          existing node's RPC.
+        </div>
       </div>`;
+    $("node-tiles").innerHTML = "";
+    $("node-chain").innerHTML = `<div class="empty">–</div>`;
+    $("node-net").innerHTML = `<div class="empty">–</div>`;
     return;
   }
-  const pct = (n.progress * 100);
-  el.innerHTML = `
-    ${n.ibd || n.progress < 0.9999 ? `
-      <div class="progress"><div style="width:${pct.toFixed(2)}%"></div></div>
-      <div class="note">Initial sync: ${pct.toFixed(2)} % — miners can already mine
-      against a fallback pool; solo templates need a synced node.</div>` : ""}
-    <dl class="kv" style="margin-top:10px">
+
+  const pct = n.progress * 100;
+  const syncing = n.ibd || n.progress < 0.9999;
+  const behind = Math.max(0, n.headers - n.blocks);
+
+  $("node-hero").innerHTML = `
+    <div class="hero">
+      <div class="hero-top">
+        <div style="min-width:0">
+          <div class="hero-label">${syncing ? "Synchronising" : "Node in sync"}</div>
+          <div class="hero-value">${syncing ? pct.toFixed(2) + "<small>%</small>"
+            : n.blocks.toLocaleString()}</div>
+          <div class="hero-sub">
+            ${syncing
+              ? `block ${n.blocks.toLocaleString()} of ${n.headers.toLocaleString()} · ${behind.toLocaleString()} to go`
+              : `tip ${ago(n.tip_time)} · ${esc(n.subversion || "")}`}
+          </div>
+        </div>
+        <div class="spacer" style="margin-left:auto"></div>
+        <div style="text-align:right">
+          <div class="hero-label" style="margin-bottom:8px">Status</div>
+          <div class="route ${syncing ? "" : "own"}">
+            <span class="pulse ${syncing ? "idle" : "live"}"></span>
+            <span class="dest">${syncing ? "catching up" : "ready for solo mining"}</span>
+          </div>
+        </div>
+      </div>
+      ${syncing ? `<div class="progress" style="margin-top:16px"><div style="width:${pct.toFixed(2)}%"></div></div>
+        <div class="hero-sub">Miners keep hashing on the fallback pool until the node is ready — the switch is automatic.</div>` : ""}
+      ${n.warnings ? `<div class="hero-sub" style="color:var(--warning)">⚠ ${esc(n.warnings)}</div>` : ""}
+    </div>`;
+
+  $("node-tiles").innerHTML = [
+    { i: ICO.height, l: "Block height", v: n.blocks.toLocaleString(),
+      s: n.tip_time ? `tip ${ago(n.tip_time)}` : "" },
+    { i: ICO.peers, l: "Peers", v: String(n.connections),
+      s: `${n.peers_out || 0} out · ${n.connections_in} in`,
+      c: n.connections < 3 ? "warn" : "" },
+    { i: ICO.mempool, l: "Mempool", v: `${n.mempool_txs.toLocaleString()} <small>tx</small>`,
+      s: `${fmtBytes(n.mempool_bytes)}${n.mempool_max ? " of " + fmtBytes(n.mempool_max) : ""}` },
+    { i: ICO.disk, l: "Chain on disk", v: fmtBytes(n.size_on_disk),
+      s: n.pruned ? `pruned${n.prune_target_b ? " to " + fmtBytes(n.prune_target_b) : ""}` : "full node" },
+  ].map(tileHTML).join("");
+
+  $("node-chain").innerHTML = `
+    <dl class="kv">
       <dt>Implementation</dt><dd>${esc(n.subversion || "Bitcoin Core")}</dd>
-      <dt>Chain</dt><dd>${esc(n.chain)}</dd>
-      <dt>Blocks</dt><dd>${n.blocks.toLocaleString()} / ${n.headers.toLocaleString()} headers</dd>
-      <dt>Verification</dt><dd>${(n.progress * 100).toFixed(3)} %</dd>
+      <dt>Network</dt><dd>${esc(n.chain)}</dd>
+      <dt>Blocks / headers</dt><dd>${n.blocks.toLocaleString()} / ${n.headers.toLocaleString()}</dd>
+      <dt>Verification</dt><dd>${pct.toFixed(3)} %</dd>
       <dt>Difficulty</dt><dd>${fmtDiff(n.difficulty)}</dd>
       <dt>Network hashrate</dt><dd>${n.network_hashps ? fmtHash(n.network_hashps / 1e9) : "–"}</dd>
-      <dt>Peers</dt><dd>${n.connections} (${n.connections_in} inbound)</dd>
-      <dt>Mempool</dt><dd>${n.mempool_txs.toLocaleString()} tx · ${fmtBytes(n.mempool_bytes)}</dd>
-      <dt>Chain size</dt><dd>${fmtBytes(n.size_on_disk)}${n.pruned ? " (pruned)" : ""}</dd>
+      <dt>Node uptime</dt><dd>${fmtUptime(n.uptime_s)}</dd>
+      ${n.tip_hash ? `<dt>Tip hash</dt><dd style="word-break:break-all;font-size:11.5px">${esc(n.tip_hash)}</dd>` : ""}
     </dl>`;
+
+  const memPct = n.mempool_max ? Math.min(100, (n.mempool_usage / n.mempool_max) * 100) : 0;
+  $("node-net").innerHTML = `
+    <dl class="kv">
+      <dt>Connections</dt><dd>${n.connections} total · ${n.peers_out || 0} outbound · ${n.connections_in} inbound</dd>
+      <dt>Traffic received</dt><dd>${fmtBytes(n.bytes_recv)}</dd>
+      <dt>Traffic sent</dt><dd>${fmtBytes(n.bytes_sent)}</dd>
+      <dt>Mempool</dt><dd>${n.mempool_txs.toLocaleString()} tx · ${fmtBytes(n.mempool_usage || n.mempool_bytes)}</dd>
+      <dt>Minimum fee</dt><dd>${n.mempool_min_fee ? (n.mempool_min_fee * 1e5).toFixed(2) + " sat/vB" : "–"}</dd>
+    </dl>
+    ${n.mempool_max ? `<div class="bar" style="margin-top:12px"><i style="width:${memPct.toFixed(1)}%"></i></div>
+      <div class="note">Mempool ${memPct.toFixed(0)} % full — a fuller mempool means more fee income in the blocks your node builds.</div>` : ""}`;
 }
+
+// ---------- peers ----------
+
+$("peers-refresh").addEventListener("click", loadPeers);
+
+async function loadPeers() {
+  const btn = $("peers-refresh");
+  btn.disabled = true;
+  try {
+    const peers = await api("GET", "/api/node/peers");
+    if (!peers.length) {
+      $("peers-body").innerHTML = `<div class="empty">No peers connected.</div>`;
+      return;
+    }
+    peers.sort((a, b) => b.connected_s - a.connected_s);
+    $("peers-body").innerHTML = `
+      <div class="table-wrap"><table class="plain">
+        <thead><tr>
+          <th>Address</th><th>Type</th><th>Client</th>
+          <th class="num">Ping</th><th class="num">Height</th>
+          <th class="num">In</th><th class="num">Out</th><th class="num">Connected</th>
+        </tr></thead>
+        <tbody>${peers.map((p) => `
+          <tr>
+            <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis">${esc(p.addr)}</td>
+            <td>${p.inbound ? "inbound" : "outbound"}${p.network && p.network !== "not_publicly_routable"
+              ? ` <span style="color:var(--muted)">${esc(p.network)}</span>` : ""}</td>
+            <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis">${esc(p.subver || "–")}</td>
+            <td class="num">${p.ping_ms ? p.ping_ms.toFixed(0) + " ms" : "–"}</td>
+            <td class="num">${p.height ? p.height.toLocaleString() : "–"}</td>
+            <td class="num">${fmtBytes(p.bytes_recv)}</td>
+            <td class="num">${fmtBytes(p.bytes_sent)}</td>
+            <td class="num">${fmtUptime(p.connected_s)}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>
+      <div class="note">${peers.length} peers · updated ${new Date().toLocaleTimeString()}</div>`;
+  } catch (err) {
+    $("peers-body").innerHTML = `<div class="empty fail">${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Refresh peers";
+  }
+}
+
+// ---------- node settings (bitcoin.conf) ----------
+
+let cfgState = null; // {schema, values, impl, helper_available}
+
+async function loadNodeConfig() {
+  try {
+    cfgState = await api("GET", "/api/node/config");
+    renderNodeConfig();
+  } catch (err) {
+    $("cfg-body").innerHTML = `<div class="empty fail">${esc(err.message)}</div>`;
+  }
+}
+
+function renderNodeConfig() {
+  if (!cfgState) return;
+  const { schema, values, impl, helper_available, conf_file } = cfgState;
+  $("cfg-impl").textContent = impl === "knots" ? "Bitcoin Knots" : "Bitcoin Core";
+  $("cfg-path").textContent = conf_file || "bitcoin.conf";
+
+  if (cfgState.error) {
+    $("cfg-body").innerHTML = `<div class="empty">
+      <strong>Settings unavailable</strong>
+      ${esc(cfgState.error)}<br>
+      NodeOS can only manage a node it installed itself.</div>`;
+    $("cfg-apply").disabled = true;
+    return;
+  }
+
+  const groups = [];
+  for (const s of schema) {
+    if (s.knots_only && impl !== "knots") continue;
+    let g = groups.find((x) => x.name === s.group);
+    if (!g) groups.push((g = { name: s.group, items: [] }));
+    g.items.push(s);
+  }
+
+  $("cfg-body").innerHTML = groups.map((g) => `
+    <div style="margin-bottom:22px">
+      <div class="hero-label" style="margin-bottom:10px">${esc(g.name)}</div>
+      <div class="grid-2">
+        ${g.items.map((s) => {
+          const v = values[s.key] ?? s.default;
+          let field;
+          if (s.type === "bool") {
+            field = `<label class="check" style="margin-top:6px">
+              <input type="checkbox" data-cfg="${s.key}" ${v === "1" ? "checked" : ""}>
+              <span>${v === "1" ? "enabled" : "disabled"}</span></label>`;
+          } else if (s.type === "enum") {
+            field = `<select data-cfg="${s.key}">${s.options.map((o) =>
+              `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${o === "" ? "all networks" : esc(o)}</option>`
+            ).join("")}</select>`;
+          } else {
+            field = `<input data-cfg="${s.key}" value="${esc(v)}"
+              ${s.type === "int" ? `type="number" min="${s.min}" max="${s.max}"` : ""}>`;
+          }
+          return `
+            <div>
+              <label>${esc(s.label)}${s.unit ? ` <span style="color:var(--muted)">(${esc(s.unit)})</span>` : ""}
+                ${s.reindex ? `<span class="badge" style="color:var(--warning);margin-left:4px">reindex</span>` : ""}
+              </label>
+              ${field}
+              <div class="note" style="margin-top:6px">${esc(s.help)}</div>
+            </div>`;
+        }).join("")}
+      </div>
+    </div>`).join("") +
+    (helper_available ? "" :
+      `<div class="note fail">The privileged helper is not installed, so settings cannot be applied from here.</div>`);
+
+  $("cfg-apply").disabled = true;
+  $("cfg-body").querySelectorAll("[data-cfg]").forEach((el) => {
+    el.addEventListener("input", () => {
+      if (el.type === "checkbox") el.nextElementSibling.textContent = el.checked ? "enabled" : "disabled";
+      $("cfg-apply").disabled = !helper_available || collectCfgChanges().count === 0;
+    });
+  });
+}
+
+function collectCfgChanges() {
+  const changed = {};
+  let count = 0;
+  if (!cfgState) return { changed, count };
+  $("cfg-body").querySelectorAll("[data-cfg]").forEach((el) => {
+    const key = el.dataset.cfg;
+    const val = el.type === "checkbox" ? (el.checked ? "1" : "0") : String(el.value).trim();
+    if (val !== String(cfgState.values[key] ?? "")) { changed[key] = val; count++; }
+  });
+  return { changed, count };
+}
+
+$("cfg-reset").addEventListener("click", renderNodeConfig);
+
+$("cfg-apply").addEventListener("click", async () => {
+  const { changed, count } = collectCfgChanges();
+  if (!count) return;
+  const reindex = (cfgState.schema || []).filter((s) => s.reindex && changed[s.key] !== undefined);
+  const warn = reindex.length
+    ? `\n\nThis change forces a reindex: ${reindex.map((s) => s.label).join(", ")}. ` +
+      `The node will be busy for hours and cannot build templates meanwhile.`
+    : "";
+  if (!confirm(`Apply ${count} change(s) and restart the Bitcoin node?${warn}`)) return;
+  $("cfg-apply").disabled = true;
+  try {
+    await api("PUT", "/api/node/config", changed);
+    toast("Settings applied — the node is restarting", "ok");
+    $("cfg-result").innerHTML = `<span class="ok">Applied. Watching the node…</span>`;
+    setTimeout(loadNodeConfig, 8000);
+  } catch (err) {
+    toast(err.message, "err");
+    $("cfg-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+    $("cfg-apply").disabled = false;
+  }
+});
 
 // ---------- system health ----------
 
@@ -764,9 +1162,9 @@ const LEVEL_ICON = { info: "ℹ", warning: "⚠", critical: "✖", party: "🎉"
 
 function alertLi(a) {
   return `<li class="lvl-${esc(a.level)}">
-    <span class="when">${new Date(a.time).toLocaleString()}</span>
     <span class="alert-ico">${LEVEL_ICON[a.level] || "•"}</span>
-    <span>${esc(a.msg)}</span>
+    <span class="msg">${esc(a.msg)}</span>
+    <span class="when" title="${esc(new Date(a.time).toLocaleString())}">${timeAgo(a.time)}</span>
   </li>`;
 }
 

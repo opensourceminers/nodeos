@@ -16,6 +16,9 @@ type Bitcoind struct {
 	RPCUser    string `json:"rpc_user"`
 	RPCPass    string `json:"rpc_pass"`
 	CookieFile string `json:"cookie_file"`
+	// ConfFile is the bitcoin.conf NodeOS reads settings from and asks the
+	// privileged helper to edit.
+	ConfFile string `json:"conf_file"`
 }
 
 type Pool struct {
@@ -107,6 +110,7 @@ func Default() Config {
 		Bitcoind: Bitcoind{
 			RPCURL:     "http://127.0.0.1:8332",
 			CookieFile: "/var/lib/bitcoind/.cookie",
+			ConfFile:   "/etc/bitcoin/bitcoin.conf",
 		},
 		Alerts: Alerts{TempMaxC: 70},
 		Work: Work{
