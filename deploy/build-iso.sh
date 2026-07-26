@@ -134,10 +134,12 @@ autoinstall:
     - ln -sf /etc/systemd/system/nodeos-firstboot.service /target/etc/systemd/system/multi-user.target.wants/nodeos-firstboot.service
 EOF
 
-log "patching boot config for autoinstall"
+log "patching boot config for autoinstall + NodeOS branding"
 for cfg in "$WORK/iso/boot/grub/grub.cfg" "$WORK/iso/boot/grub/loopback.cfg"; do
   [[ -f "$cfg" ]] || continue
   sed -i 's|---|autoinstall ds=nocloud\\;s=/cdrom/nodeos-autoinstall/ ---|' "$cfg"
+  sed -i 's/Try or Install Ubuntu Server/Install NodeOS  (WIPES the first disk!)/' "$cfg"
+  sed -i 's/Ubuntu Server with the HWE kernel/Install NodeOS  (HWE kernel, newer hardware)/' "$cfg"
 done
 # shorter timeout: boot straight into the installer
 sed -i 's/timeout=30/timeout=3/' "$WORK/iso/boot/grub/grub.cfg" || true

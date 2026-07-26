@@ -198,6 +198,81 @@ EOF
   [[ $NO_START -eq 1 ]] || systemctl restart bitcoind
 fi
 
+# ---------- console branding ----------
+
+log "installing NodeOS console banner"
+cat > /usr/local/bin/nodeos-banner <<'EOF'
+#!/bin/sh
+# Regenerates /etc/issue (pre-login console screen) with access info.
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+[ -n "$IP" ] || IP="(no network yet)"
+VER="$(/usr/local/bin/nodeosd --version 2>/dev/null || echo NodeOS)"
+{
+cat <<'ART'
+
+  ███╗   ██╗ ██████╗ ██████╗ ███████╗     ██████╗ ███████╗
+  ████╗  ██║██╔═══██╗██╔══██╗██╔════╝    ██╔═══██╗██╔════╝
+  ██╔██╗ ██║██║   ██║██║  ██║█████╗      ██║   ██║███████╗
+  ██║╚██╗██║██║   ██║██║  ██║██╔══╝      ██║   ██║╚════██║
+  ██║ ╚████║╚██████╔╝██████╔╝███████╗    ╚██████╔╝███████║
+  ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+        Bitcoin mining & node control plane
+
+ART
+printf '  %s\n\n' "$VER"
+printf '  Web UI:   http://%s/\n' "$IP"
+printf '  SSH:      ssh nodeos@%s\n' "$IP"
+printf '  Login:    nodeos  (default password: nodeos - change it with: passwd)\n\n'
+} > /etc/issue
+# refresh the login prompt on tty1 unless someone is working there
+who 2>/dev/null | grep -q tty1 || systemctl try-restart getty@tty1.service 2>/dev/null || true
+EOF
+chmod 0755 /usr/local/bin/nodeos-banner
+
+cat > /etc/systemd/system/nodeos-banner.service <<'EOF'
+[Unit]
+Description=NodeOS console banner (login screen info)
+After=network-online.target nodeosd.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nodeos-banner
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# post-login banner (motd)
+mkdir -p /etc/update-motd.d
+cat > /etc/update-motd.d/10-nodeos <<'EOF'
+#!/bin/sh
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+NSTAT="$(systemctl is-active nodeosd 2>/dev/null || echo unknown)"
+BSTAT="$(systemctl is-active bitcoind 2>/dev/null || echo not-installed)"
+cat <<'ART'
+
+  ███╗   ██╗ ██████╗ ██████╗ ███████╗     ██████╗ ███████╗
+  ████╗  ██║██╔═══██╗██╔══██╗██╔════╝    ██╔═══██╗██╔════╝
+  ██╔██╗ ██║██║   ██║██║  ██║█████╗      ██║   ██║███████╗
+  ██║╚██╗██║██║   ██║██║  ██║██╔══╝      ██║   ██║╚════██║
+  ██║ ╚████║╚██████╔╝██████╔╝███████╗    ╚██████╔╝███████║
+  ╚═╝  ╚═══╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝ ╚══════╝
+
+ART
+printf '  Web UI:    http://%s/\n' "$IP"
+printf '  Services:  nodeosd %s · bitcoind %s\n' "$NSTAT" "$BSTAT"
+printf '  Logs:      journalctl -u nodeosd -f\n\n'
+EOF
+chmod 0755 /etc/update-motd.d/10-nodeos
+# silence Ubuntu's default motd noise (ads, help text); harmless if absent
+chmod -x /etc/update-motd.d/10-help-text /etc/update-motd.d/50-motd-news \
+         /etc/update-motd.d/88-esm-announce /etc/update-motd.d/91-contract-ua-esm-status \
+         2>/dev/null || true
+systemctl disable --now motd-news.timer >/dev/null 2>&1 || true
+systemctl enable nodeos-banner >/dev/null 2>&1 || true
+/usr/local/bin/nodeos-banner || true
+
 # ---------- start ----------
 
 systemctl daemon-reload

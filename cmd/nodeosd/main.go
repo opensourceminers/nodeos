@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -32,8 +33,14 @@ func main() {
 		demo     = flag.Bool("demo", false, "start simulated miners (overrides config)")
 		scanCIDR = flag.String("scan-cidr", "", "subnet to scan, e.g. 192.168.1.0/24 (overrides config)")
 		noScan   = flag.Bool("no-scan", false, "skip the automatic discovery scan at startup")
+		showVer  = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+
+	if *showVer {
+		fmt.Println("NodeOS nodeosd v" + version)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
