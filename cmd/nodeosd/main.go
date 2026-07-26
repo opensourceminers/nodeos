@@ -144,7 +144,7 @@ func main() {
 	handler := server.New(server.Deps{
 		Cfg: cfg, Version: version, Fleet: fm, Node: nc, Feed: feed,
 		Engine: eng, Auth: authm, Admin: adm, Update: upd,
-		Health: hm, ConfigPath: *cfgPath,
+		Health: hm, Store: st, ConfigPath: *cfgPath,
 	}).Handler()
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: handler}

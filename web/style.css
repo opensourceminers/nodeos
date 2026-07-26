@@ -340,6 +340,72 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
 .chart-tooltip b { font-size: 13px; }
 .chart-tooltip .t { color: var(--muted); }
 
+/* ---------- peer map (node command centre) ---------- */
+
+.map-panel { padding-bottom: var(--s4); }
+.map-wrap { position: relative; }
+#peer-map {
+  display: block; width: 100%; height: auto;
+  max-height: 460px;
+  background:
+    radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--series-1) 7%, transparent), transparent 70%),
+    var(--page);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+#peer-map .land path {
+  fill: var(--surface-2);
+  stroke: var(--border-2);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
+#peer-map .arc {
+  fill: none;
+  stroke: var(--series-1);
+  stroke-width: 1;
+  stroke-opacity: 0.42;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 3 4;
+  animation: flow 3.2s linear infinite;
+}
+@keyframes flow { to { stroke-dashoffset: -21; } }
+#peer-map .peer-dot {
+  fill: var(--series-1);
+  fill-opacity: 0.85;
+  stroke: var(--page);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+  transition: fill-opacity var(--fast);
+}
+#peer-map .peer-dot:hover { fill-opacity: 1; }
+#peer-map .peer-dot.inbound { fill: var(--good); }
+#peer-map .self-mark .core { fill: var(--accent); }
+#peer-map .self-mark .halo {
+  fill: var(--accent); fill-opacity: 0.16;
+  animation: halo 3s ease-out infinite;
+}
+@keyframes halo {
+  0% { r: 6; fill-opacity: 0.34; }
+  70% { r: 22; fill-opacity: 0; }
+  100% { r: 22; fill-opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #peer-map .arc, #peer-map .self-mark .halo { animation: none; }
+}
+
+.map-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s4);
+  margin-top: var(--s3);
+  font-size: 12px; color: var(--ink-2);
+}
+.map-legend span { display: inline-flex; align-items: center; gap: var(--s2); }
+.map-legend .muted { color: var(--muted); }
+.map-legend .key { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.map-legend .key.self { background: var(--accent); }
+.map-legend .key.out { background: var(--series-1); }
+.map-legend .key.in { background: var(--good); }
+
 /* ---------- miners ---------- */
 
 .toolbar {

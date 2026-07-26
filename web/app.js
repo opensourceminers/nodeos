@@ -758,6 +758,120 @@ function renderNode() {
       <div class="note">Mempool ${memPct.toFixed(0)} % full — a fuller mempool means more fee income in the blocks your node builds.</div>` : ""}`;
 }
 
+// ---------- peer map ----------
+//
+// Equirectangular projection into the 1000×500 viewBox that world.js is
+// generated for. Peers are placed at their country's centroid — the geo table
+// is country-level on purpose, so the map must not pretend to be more precise
+// than that.
+
+const MAP_W = 1000, MAP_H = 500;
+const proj = (lat, lon) => [(lon + 180) / 360 * MAP_W, (90 - lat) / 180 * MAP_H];
+
+let peerData = { peers: [], self: null };
+
+function renderPeerMap() {
+  const svg = $("peer-map");
+  if (typeof WORLD_PATHS === "undefined") return;
+
+  const land = WORLD_PATHS.map((d) => `<path d="${d}"/>`).join("");
+
+  // group peers by country so a dot's size means "how many peers there"
+  const byCC = new Map();
+  let unlocated = 0;
+  for (const p of peerData.peers) {
+    const cc = p.country && COUNTRY_LATLON[p.country] ? p.country : null;
+    if (!cc) { unlocated++; continue; }
+    if (!byCC.has(cc)) byCC.set(cc, []);
+    byCC.get(cc).push(p);
+  }
+
+  const self = peerData.self ? proj(peerData.self.lat, peerData.self.lon) : null;
+
+  let arcs = "", dots = "";
+  for (const [cc, list] of byCC) {
+    const [lat, lon] = COUNTRY_LATLON[cc];
+    const [x, y] = proj(lat, lon);
+    const r = Math.min(9, 3.2 + Math.log2(list.length + 1) * 1.6);
+    const inbound = list.filter((p) => p.inbound).length;
+
+    if (self) {
+      // quadratic arc bowed away from the straight line, so overlapping
+      // connections stay distinguishable
+      const mx = (self[0] + x) / 2, my = (self[1] + y) / 2;
+      const dx = x - self[0], dy = y - self[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const bow = Math.min(70, len * 0.22);
+      const cx = mx - (dy / len) * bow, cy = my + (dx / len) * bow;
+      arcs += `<path class="arc" d="M${self[0].toFixed(1)} ${self[1].toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}"/>`;
+    }
+    dots += `<circle class="peer-dot${inbound === list.length && list.length ? " inbound" : ""}"
+      cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}"
+      data-cc="${cc}" data-n="${list.length}" data-in="${inbound}"/>`;
+  }
+
+  const selfMark = self ? `
+    <g class="self-mark" transform="translate(${self[0].toFixed(1)} ${self[1].toFixed(1)})">
+      <circle class="halo" r="14"/>
+      <circle class="core" r="4.5"/>
+    </g>` : "";
+
+  svg.innerHTML = `<g class="land">${land}</g><g class="arcs">${arcs}</g>${selfMark}<g class="dots">${dots}</g>`;
+
+  const located = peerData.peers.length - unlocated;
+  $("map-legend").innerHTML = peerData.self ? `
+    <span><i class="key self"></i>your node · ${esc(peerData.self.zone)}</span>
+    <span><i class="key out"></i>outbound</span>
+    <span><i class="key in"></i>inbound</span>
+    <span class="muted">${located} of ${peerData.peers.length} peers located${
+      unlocated ? ` · ${unlocated} without location (Tor / unknown)` : ""}</span>
+    <button class="btn small" id="map-clear" style="margin-left:auto">Reset position</button>` : `
+    <span><i class="key out"></i>outbound</span>
+    <span><i class="key in"></i>inbound</span>
+    <span class="muted">${located} of ${peerData.peers.length} peers located —
+      <b style="color:var(--accent)">click the map to place your node</b> and draw its connections</span>`;
+
+  const clearBtn = $("map-clear");
+  if (clearBtn) clearBtn.addEventListener("click", async () => {
+    try {
+      await api("PUT", "/api/node/location", { clear: true });
+      toast("Node position reset", "ok");
+      loadPeers();
+    } catch (err) { toast(err.message, "err"); }
+  });
+
+  svg.querySelectorAll(".peer-dot").forEach((el) => {
+    el.addEventListener("mouseenter", (e) => {
+      const cc = el.dataset.cc, n = +el.dataset.n, inb = +el.dataset.in;
+      const tip = $("map-tooltip");
+      tip.innerHTML = `<b>${esc(cc)}</b> — ${n} peer${n > 1 ? "s" : ""}<br>
+        <span class="t">${inb} inbound · ${n - inb} outbound</span>`;
+      tip.style.display = "block";
+      const wrap = svg.parentElement.getBoundingClientRect();
+      const dot = el.getBoundingClientRect();
+      tip.style.left = Math.min(dot.left - wrap.left + 14, wrap.width - 150) + "px";
+      tip.style.top = (dot.top - wrap.top - 8) + "px";
+    });
+    el.addEventListener("mouseleave", () => { $("map-tooltip").style.display = "none"; });
+  });
+}
+
+$("map-refresh").addEventListener("click", loadPeers);
+
+// Placing the node by clicking the map keeps the whole feature offline: no
+// geocoder, no public-IP probe, and precise enough for a country-level map.
+$("peer-map").addEventListener("click", async (e) => {
+  const svg = $("peer-map");
+  const rect = svg.getBoundingClientRect();
+  const lon = ((e.clientX - rect.left) / rect.width) * 360 - 180;
+  const lat = 90 - ((e.clientY - rect.top) / rect.height) * 180;
+  try {
+    await api("PUT", "/api/node/location", { lat, lon });
+    toast(`Node placed at ${lat.toFixed(1)}°, ${lon.toFixed(1)}°`, "ok");
+    loadPeers();
+  } catch (err) { toast(err.message, "err"); }
+});
+
 // ---------- peers ----------
 
 $("peers-refresh").addEventListener("click", loadPeers);
@@ -766,7 +880,10 @@ async function loadPeers() {
   const btn = $("peers-refresh");
   btn.disabled = true;
   try {
-    const peers = await api("GET", "/api/node/peers");
+    const resp = await api("GET", "/api/node/peers");
+    const peers = resp.peers || [];
+    peerData = { peers, self: resp.self || null };
+    renderPeerMap();
     if (!peers.length) {
       $("peers-body").innerHTML = `<div class="empty">No peers connected.</div>`;
       return;
@@ -775,13 +892,14 @@ async function loadPeers() {
     $("peers-body").innerHTML = `
       <div class="table-wrap"><table class="plain">
         <thead><tr>
-          <th>Address</th><th>Type</th><th>Client</th>
+          <th>Address</th><th>Country</th><th>Type</th><th>Client</th>
           <th class="num">Ping</th><th class="num">Height</th>
           <th class="num">In</th><th class="num">Out</th><th class="num">Connected</th>
         </tr></thead>
         <tbody>${peers.map((p) => `
           <tr>
             <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis">${esc(p.addr)}</td>
+            <td>${p.country ? esc(p.country) : `<span style="color:var(--muted)">–</span>`}</td>
             <td>${p.inbound ? "inbound" : "outbound"}${p.network && p.network !== "not_publicly_routable"
               ? ` <span style="color:var(--muted)">${esc(p.network)}</span>` : ""}</td>
             <td style="max-width:190px;overflow:hidden;text-overflow:ellipsis">${esc(p.subver || "–")}</td>

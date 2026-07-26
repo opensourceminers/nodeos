@@ -152,6 +152,21 @@
 <!-- ============ NODE ============ -->
 <section class="tab" id="tab-node">
   <div id="node-hero"></div>
+
+  <div class="panel map-panel">
+    <div class="panel-head">
+      <h2>Peer map</h2>
+      <span class="badge" id="map-note">offline lookup</span>
+      <button class="btn small" id="map-refresh" style="margin-left:auto">Refresh</button>
+    </div>
+    <div class="map-wrap">
+      <svg id="peer-map" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet"
+           role="img" aria-label="World map with the node and its peers"></svg>
+      <div class="chart-tooltip" id="map-tooltip"></div>
+      <div class="map-legend" id="map-legend"></div>
+    </div>
+  </div>
+
   <div class="tiles" id="node-tiles"></div>
 
   <div class="grid-2">
@@ -385,6 +400,7 @@
 </div><!-- /content -->
 </div><!-- /shell -->
 
+<script src="world.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

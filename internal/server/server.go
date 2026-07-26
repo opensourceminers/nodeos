@@ -20,6 +20,7 @@ import (
 	"nodeos/internal/auth"
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
+	"nodeos/internal/geoip"
 	"nodeos/internal/health"
 	"nodeos/internal/node"
 	"nodeos/internal/store"
@@ -41,6 +42,7 @@ type Deps struct {
 	Admin   *admin.Client
 	Update  *update.Checker
 	Health  *health.Monitor
+	Store   *store.Store
 	// ConfigPath is included (redacted) in support bundles.
 	ConfigPath string
 }
@@ -57,6 +59,7 @@ type Server struct {
 	admin   *admin.Client
 	update  *update.Checker
 	health  *health.Monitor
+	store   *store.Store
 	cfgPath string
 
 	sseMu   sync.Mutex
@@ -68,7 +71,7 @@ func New(d Deps) *Server {
 		cfg: d.Cfg, version: d.Version, started: time.Now(),
 		fleet: d.Fleet, node: d.Node, feed: d.Feed, engine: d.Engine,
 		auth: d.Auth, admin: d.Admin, update: d.Update,
-		health: d.Health, cfgPath: d.ConfigPath,
+		health: d.Health, store: d.Store, cfgPath: d.ConfigPath,
 		sseSubs: map[chan []byte]struct{}{},
 	}
 	d.Fleet.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
@@ -187,7 +190,44 @@ func (s *Server) Handler() http.Handler {
 			httpErr(w, 502, err)
 			return
 		}
-		writeJSON(w, peers)
+		resp := map[string]any{"peers": peers}
+		// where "here" is: the user's own pin wins, otherwise the system time
+		// zone's coordinates. Never a geo-IP service — that would hand a third
+		// party this node's address.
+		if loc := s.store.Get().NodeLoc; loc != nil {
+			resp["self"] = map[string]any{"lat": loc.Lat, "lon": loc.Lon, "zone": "set manually"}
+		} else if lat, lon, zone, ok := geoip.LocalCoords(); ok {
+			resp["self"] = map[string]any{"lat": lat, "lon": lon, "zone": zone}
+		}
+		writeJSON(w, resp)
+	})
+
+	mux.HandleFunc("PUT /api/node/location", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Lat   float64 `json:"lat"`
+			Lon   float64 `json:"lon"`
+			Clear bool    `json:"clear"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if !req.Clear && (req.Lat < -90 || req.Lat > 90 || req.Lon < -180 || req.Lon > 180) {
+			httpErr(w, 400, fmt.Errorf("coordinates out of range"))
+			return
+		}
+		err := s.store.Update(func(st *store.State) {
+			if req.Clear {
+				st.NodeLoc = nil
+			} else {
+				st.NodeLoc = &store.NodeLocation{Lat: req.Lat, Lon: req.Lon}
+			}
+		})
+		if err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
 	})
 
 	mux.HandleFunc("GET /api/node/config", func(w http.ResponseWriter, r *http.Request) {

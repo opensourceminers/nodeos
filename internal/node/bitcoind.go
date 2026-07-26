@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"nodeos/internal/config"
+	"nodeos/internal/geoip"
 )
 
 type Client struct {
@@ -72,6 +73,7 @@ type Peer struct {
 	ConnectedS int64   `json:"connected_s"`
 	Height     int64   `json:"height"`
 	Relay      bool    `json:"relay"`
+	Country    string  `json:"country,omitempty"`
 }
 
 // flexWarnings copes with bitcoind's warnings field, a string in older
@@ -292,6 +294,7 @@ func (c *Client) Peers(ctx context.Context) ([]Peer, error) {
 			Inbound: p.Inbound, PingMS: p.PingTime * 1000,
 			BytesSent: p.BytesS, BytesRecv: p.BytesR,
 			ConnectedS: now - p.ConnTime, Height: p.Height, Relay: p.Relay,
+			Country: geoip.Country(p.Addr),
 		})
 	}
 	return out, nil
