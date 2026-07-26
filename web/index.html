@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NodeOS</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>⛏️</text></svg>">
+</head>
+<body>
+
+<header>
+  <div class="wordmark">Node<span>OS</span></div>
+  <span class="badge" id="version">v–</span>
+  <span class="badge demo" id="demo-badge" hidden>DEMO MODE — simulated fleet</span>
+  <div class="header-stats">
+    <div class="header-stat">
+      <div class="v" id="hs-hash">–</div>
+      <div class="k">fleet hashrate</div>
+    </div>
+    <div class="header-stat">
+      <div class="v" id="hs-miners">–</div>
+      <div class="k">miners online</div>
+    </div>
+    <div class="header-stat">
+      <div class="v" id="hs-node">–</div>
+      <div class="k">node</div>
+    </div>
+  </div>
+</header>
+
+<nav id="nav">
+  <button data-tab="dashboard" class="active">Dashboard</button>
+  <button data-tab="miners">Miners <span class="count" id="nav-miner-count"></span></button>
+  <button data-tab="node">Node</button>
+  <button data-tab="alerts">Alerts <span class="count" id="nav-alert-count"></span></button>
+  <button data-tab="settings">Settings</button>
+</nav>
+
+<main>
+
+<!-- ============ DASHBOARD ============ -->
+<section class="tab active" id="tab-dashboard">
+  <div class="tiles" id="tiles"></div>
+
+  <div class="panel">
+    <h2>Fleet hashrate — last hour</h2>
+    <div class="chart-wrap" id="fleet-chart-wrap">
+      <svg id="fleet-chart" role="img" aria-label="Fleet hashrate over the last hour"></svg>
+      <div class="chart-tooltip" id="fleet-tooltip"></div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <h2>Solo odds — the honest numbers</h2>
+      <div id="solo-body"><div class="empty">Waiting for node difficulty…</div></div>
+      <div class="honesty">
+        Solo mining is a lottery: every share is a ticket, the expected time is a
+        statistical average — a block can come in ten minutes or never. NodeOS
+        shows real odds instead of hiding them.
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Recent events</h2>
+      <ul class="alert-list" id="dash-alerts"><li class="empty">No events yet</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ MINERS ============ -->
+<section class="tab" id="tab-miners">
+  <div class="panel">
+    <div class="form-row">
+      <div>
+        <label for="scan-cidr">Subnet scan (blank = auto-detect)</label>
+        <input id="scan-cidr" placeholder="192.168.1.0/24">
+      </div>
+      <button class="btn primary" id="btn-scan">Scan for miners</button>
+      <div>
+        <label for="add-host">Add miner by IP</label>
+        <input id="add-host" placeholder="192.168.1.42">
+      </div>
+      <button class="btn" id="btn-add">Add</button>
+    </div>
+    <div class="note" id="scan-status"></div>
+  </div>
+  <div class="miner-grid" id="miner-grid"></div>
+  <div class="empty" id="miners-empty" hidden>
+    No miners yet. Run a subnet scan or add one by IP — Bitaxe, NerdAxe and
+    NerdQAxe devices are detected automatically.
+  </div>
+</section>
+
+<!-- ============ NODE ============ -->
+<section class="tab" id="tab-node">
+  <div class="panel">
+    <h2>Bitcoin Core</h2>
+    <div id="node-body"><div class="empty">Checking node…</div></div>
+  </div>
+</section>
+
+<!-- ============ ALERTS ============ -->
+<section class="tab" id="tab-alerts">
+  <div class="panel">
+    <h2>Event log</h2>
+    <ul class="alert-list" id="alert-list"><li class="empty">No events yet</li></ul>
+  </div>
+</section>
+
+<!-- ============ SETTINGS ============ -->
+<section class="tab" id="tab-settings">
+  <div class="grid-2">
+    <div class="panel">
+      <h2>Pool / Stratum</h2>
+      <label for="p-url">Stratum host</label>
+      <input id="p-url" placeholder="public-pool.io or your node's DATUM gateway">
+      <label for="p-port">Port</label>
+      <input id="p-port" type="number" placeholder="21496">
+      <label for="p-user">Worker / payout address</label>
+      <input id="p-user" placeholder="bc1q… .worker">
+      <label for="p-furl">Fallback host (optional)</label>
+      <input id="p-furl">
+      <label for="p-fport">Fallback port</label>
+      <input id="p-fport" type="number">
+      <label for="p-fuser">Fallback worker</label>
+      <input id="p-fuser">
+      <div style="margin-top:14px; display:flex; gap:10px;">
+        <button class="btn" id="btn-pool-save">Save</button>
+        <button class="btn primary" id="btn-pool-apply">Save &amp; apply to fleet</button>
+      </div>
+      <div class="note">
+        Applying pushes these stratum settings to every online miner and
+        restarts it (required by AxeOS). Devices are updated one by one.
+      </div>
+      <div class="result-list" id="apply-results"></div>
+    </div>
+    <div class="panel">
+      <h2>About</h2>
+      <dl class="kv">
+        <dt>Version</dt><dd id="about-version">–</dd>
+        <dt>Uptime</dt><dd id="about-uptime">–</dd>
+        <dt>Mode</dt><dd id="about-mode">–</dd>
+        <dt>API</dt><dd><a href="/api/status" target="_blank">/api/status</a> · <a href="/api/miners" target="_blank">/api/miners</a> · <a href="/api/events" target="_blank">/api/events</a></dd>
+      </dl>
+      <div class="note">
+        NodeOS prototype. No authentication yet — run it on a trusted LAN or
+        VLAN only. Roadmap: passkeys, WireGuard remote access, firmware
+        updates, DATUM/Stratum-V2 work engine supervision.
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
