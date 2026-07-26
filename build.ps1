@@ -10,10 +10,13 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
 }
 
 New-Item -ItemType Directory -Force dist | Out-Null
-go vet ./...
 
+# vet against the linux target: internal/health uses syscall.Statfs, which
+# does not exist on windows — the product only ships on linux anyway
 $env:CGO_ENABLED = "0"
 $env:GOOS = "linux"
+go vet ./...
+
 foreach ($arch in "amd64", "arm64") {
     $env:GOARCH = $arch
     go build -trimpath -ldflags "-s -w" -o "dist/nodeosd-linux-$arch" ./cmd/nodeosd
