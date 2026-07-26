@@ -359,28 +359,45 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
   stroke-width: 0.6;
   vector-effect: non-scaling-stroke;
 }
+#peer-map { cursor: grab; touch-action: none; user-select: none; }
+#peer-map:active { cursor: grabbing; }
 #peer-map .arc {
   fill: none;
-  stroke: var(--series-1);
-  stroke-width: 1;
-  stroke-opacity: 0.42;
+  stroke: var(--accent);
+  stroke-width: 1.1;
+  stroke-opacity: 0.5;
   vector-effect: non-scaling-stroke;
-  stroke-dasharray: 3 4;
-  animation: flow 3.2s linear infinite;
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+  animation: flow 2.8s linear infinite;
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 55%, transparent));
 }
 @keyframes flow { to { stroke-dashoffset: -21; } }
+#peer-map .packet {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+#peer-map .packet.in { fill: var(--good); filter: drop-shadow(0 0 4px var(--good)); }
 #peer-map .peer-dot {
   fill: var(--series-1);
-  fill-opacity: 0.85;
+  fill-opacity: 0.88;
   stroke: var(--page);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
   cursor: pointer;
   transition: fill-opacity var(--fast);
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--series-1) 60%, transparent));
 }
 #peer-map .peer-dot:hover { fill-opacity: 1; }
-#peer-map .peer-dot.inbound { fill: var(--good); }
-#peer-map .self-mark .core { fill: var(--accent); }
+#peer-map .peer-dot.inbound {
+  fill: var(--good);
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--good) 60%, transparent));
+}
+#peer-map .self-mark { pointer-events: none; }
+#peer-map .self-mark .core {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 5px var(--accent));
+}
 #peer-map .self-mark .halo {
   fill: var(--accent); fill-opacity: 0.16;
   animation: halo 3s ease-out infinite;
@@ -392,7 +409,26 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
 }
 @media (prefers-reduced-motion: reduce) {
   #peer-map .arc, #peer-map .self-mark .halo { animation: none; }
+  #peer-map .packet { display: none; }
 }
+
+.map-zoom {
+  position: absolute; top: var(--s3); right: var(--s3);
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.map-zoom button {
+  width: 30px; height: 30px;
+  background: none; border: none;
+  color: var(--ink-2); font-size: 15px; font-weight: 600;
+  cursor: pointer;
+  transition: background var(--fast), color var(--fast);
+}
+.map-zoom button:hover { background: var(--surface-3); color: var(--ink); }
 
 .map-legend {
   display: flex; flex-wrap: wrap; gap: var(--s4);
@@ -447,6 +483,14 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
   font-weight: 650; font-size: 14px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.miner-link { color: var(--ink); }
+.miner-link:hover { color: var(--series-1); text-decoration: none; }
+.miner-link .ext {
+  font-size: 10px; color: var(--muted);
+  margin-left: 4px; opacity: 0;
+  transition: opacity var(--fast);
+}
+.miner-link:hover .ext, .miner-card:hover .miner-link .ext, tr:hover .miner-link .ext { opacity: 1; }
 .miner-card .model {
   font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
   color: var(--ink-2); background: var(--surface-2);

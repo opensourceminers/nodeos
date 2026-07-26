@@ -178,8 +178,17 @@ $("nav").addEventListener("click", (e) => {
     t.classList.toggle("active", t.id === "tab-" + btn.dataset.tab));
   $("page-title").textContent = btn.querySelector(".lbl").textContent;
   $("sidebar").classList.remove("open"); // close the drawer on mobile
+  if (btn.dataset.tab === "node" && !peersLoadedOnce) loadPeers();
   if (snapshot) render();
 });
+
+// the peer map is a living view: refresh it while the node page is visible
+setInterval(() => {
+  if (document.querySelector("#tab-node.active") && $("auth-overlay").hidden &&
+      !document.hidden && peersLoadedOnce) {
+    loadPeers();
+  }
+}, 30000);
 
 $("menu-toggle").addEventListener("click", () => $("sidebar").classList.toggle("open"));
 $("theme-btn").addEventListener("click", toggleTheme);
@@ -341,7 +350,9 @@ function renderTiles() {
       s: solo.network_difficulty && fleet.best_diff
         ? `${(fleet.best_diff / solo.network_difficulty * 100).toFixed(2)} % of a block` : "all-time best" },
     { i: ICO.odds, l: "Chance of a block", v: oddsDay ? `${(oddsDay * 100).toPrecision(2)} <small>% / day</small>` : "–",
-      s: solo.expected_seconds ? `≈ ${fmtDur(solo.expected_seconds)} on average` : "needs node + hashrate" },
+      s: solo.expected_seconds ? `≈ ${fmtDur(solo.expected_seconds)} on average`
+        : solo.syncing ? "waiting for full node sync" : "needs node + hashrate",
+      c: solo.syncing ? "warn" : "" },
     workTile(snapshot.work),
   ];
   $("tiles").innerHTML = tiles.map(tileHTML).join("");
@@ -494,6 +505,15 @@ function renderSolo() {
     el.innerHTML = `<div class="empty">Connect a Bitcoin node to see real solo odds.</div>`;
     return;
   }
+  if (solo.syncing) {
+    const pct = (node.progress * 100).toFixed(1);
+    el.innerHTML = `<div class="empty">
+      <strong>Waiting for the node to finish syncing (${pct} %)</strong>
+      A half-synced chain reports the difficulty of years ago — odds computed
+      from it would look absurdly good. Real numbers appear at the chain tip.
+    </div>`;
+    return;
+  }
   if (!solo.expected_seconds) {
     el.innerHTML = `<div class="empty">Waiting for hashrate and difficulty…</div>`;
     return;
@@ -574,7 +594,8 @@ function renderMiners() {
     return `
     <div class="miner-card ${m.online ? "" : "offline"}" data-host="${esc(m.host)}">
       <div class="top">
-        <span class="name">${esc(m.label)}</span>
+        <a class="name miner-link" href="http://${esc(m.host)}/" target="_blank" rel="noopener"
+           title="Open this miner's own web interface (AxeOS)">${esc(m.label)}<span class="ext">↗</span></a>
         <span class="model">${esc(i.ASICModel || m.source)}</span>
         <span class="status-chip ${m.online ? "online" : "offline"}"><span class="dot"></span>${m.online ? "online" : "offline"}</span>
       </div>
@@ -614,7 +635,8 @@ function minerTable(miners) {
       const d = destination(i);
       return `<tr data-host="${esc(m.host)}">
         <td><span class="status-chip ${m.online ? "online" : "offline"}" style="margin:0"><span class="dot"></span></span>
-          ${esc(m.label)}</td>
+          <a class="miner-link" href="http://${esc(m.host)}/" target="_blank" rel="noopener"
+             title="Open this miner's own web interface">${esc(m.label)}<span class="ext">↗</span></a></td>
         <td>${esc(i.ASICModel || m.source)}</td>
         <td class="num">${m.online ? fmtHash(i.hashRate || 0) : "–"}</td>
         <td class="num ${tempClass(i.temp || 0)}">${i.temp ? i.temp.toFixed(0) + " °C" : "–"}</td>
@@ -769,6 +791,96 @@ const MAP_W = 1000, MAP_H = 500;
 const proj = (lat, lon) => [(lon + 180) / 360 * MAP_W, (90 - lat) / 180 * MAP_H];
 
 let peerData = { peers: [], self: null };
+let peersLoadedOnce = false;
+
+// ---- zoom & pan (viewBox based; strokes are non-scaling) ----
+
+let mapView = { x: 0, y: 0, w: MAP_W, h: MAP_H };
+
+function applyMapView() {
+  const svg = $("peer-map");
+  svg.setAttribute("viewBox", `${mapView.x.toFixed(1)} ${mapView.y.toFixed(1)} ${mapView.w.toFixed(1)} ${mapView.h.toFixed(1)}`);
+  // counter-scale point markers (sqrt: shrink a little, stay visible)
+  const k = 1 / Math.sqrt(MAP_W / mapView.w);
+  svg.querySelectorAll(".peer-dot").forEach((el) =>
+    el.setAttribute("r", (parseFloat(el.dataset.r) * k).toFixed(2)));
+  const sm = svg.querySelector(".self-mark");
+  if (sm) sm.setAttribute("transform",
+    `translate(${sm.dataset.x} ${sm.dataset.y}) scale(${k.toFixed(3)})`);
+}
+
+function mapZoom(factor, cx, cy) {
+  // cx/cy in viewBox coordinates; defaults to the centre of the current view
+  if (cx === undefined) { cx = mapView.x + mapView.w / 2; cy = mapView.y + mapView.h / 2; }
+  let w = Math.min(MAP_W, Math.max(MAP_W / 10, mapView.w * factor));
+  const h = w / 2;
+  let x = cx - (cx - mapView.x) * (w / mapView.w);
+  let y = cy - (cy - mapView.y) * (h / mapView.h);
+  mapView = {
+    x: Math.max(0, Math.min(MAP_W - w, x)),
+    y: Math.max(0, Math.min(MAP_H - h, y)),
+    w, h,
+  };
+  applyMapView();
+}
+
+function mapPoint(e) {
+  const rect = $("peer-map").getBoundingClientRect();
+  return [
+    mapView.x + ((e.clientX - rect.left) / rect.width) * mapView.w,
+    mapView.y + ((e.clientY - rect.top) / rect.height) * mapView.h,
+  ];
+}
+
+$("map-zin").addEventListener("click", () => mapZoom(1 / 1.5));
+$("map-zout").addEventListener("click", () => mapZoom(1.5));
+$("map-zreset").addEventListener("click", () => { mapView = { x: 0, y: 0, w: MAP_W, h: MAP_H }; applyMapView(); });
+
+$("peer-map").addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const [mx, my] = mapPoint(e);
+  mapZoom(e.deltaY < 0 ? 1 / 1.25 : 1.25, mx, my);
+}, { passive: false });
+
+$("peer-map").addEventListener("dblclick", (e) => {
+  e.preventDefault();
+  const [mx, my] = mapPoint(e);
+  mapZoom(1 / 1.8, mx, my);
+});
+
+let panState = null;
+$("peer-map").addEventListener("pointerdown", (e) => {
+  panState = { px: e.clientX, py: e.clientY, x: mapView.x, y: mapView.y, moved: false };
+  $("peer-map").setPointerCapture(e.pointerId);
+});
+$("peer-map").addEventListener("pointermove", (e) => {
+  if (!panState) return;
+  if (Math.abs(e.clientX - panState.px) + Math.abs(e.clientY - panState.py) > 5) panState.moved = true;
+  if (!panState.moved) return;
+  const rect = $("peer-map").getBoundingClientRect();
+  const dx = (e.clientX - panState.px) * (mapView.w / rect.width);
+  const dy = (e.clientY - panState.py) * (mapView.h / rect.height);
+  mapView.x = Math.max(0, Math.min(MAP_W - mapView.w, panState.x - dx));
+  mapView.y = Math.max(0, Math.min(MAP_H - mapView.h, panState.y - dy));
+  applyMapView();
+});
+$("peer-map").addEventListener("pointerup", async (e) => {
+  const wasDrag = panState && panState.moved;
+  panState = null;
+  if (wasDrag || e.target.closest(".peer-dot")) return;
+  // a clean click places the node — viewBox-aware, works while zoomed
+  const [mx, my] = mapPoint(e);
+  const lon = (mx / MAP_W) * 360 - 180;
+  const lat = 90 - (my / MAP_H) * 180;
+  try {
+    await api("PUT", "/api/node/location", { lat, lon });
+    toast(`Node placed at ${lat.toFixed(1)}°, ${lon.toFixed(1)}°`, "ok");
+    loadPeers();
+  } catch (err) { toast(err.message, "err"); }
+});
+$("peer-map").addEventListener("pointercancel", () => { panState = null; });
+
+// ---- rendering ----
 
 function renderPeerMap() {
   const svg = $("peer-map");
@@ -788,35 +900,57 @@ function renderPeerMap() {
 
   const self = peerData.self ? proj(peerData.self.lat, peerData.self.lon) : null;
 
-  let arcs = "", dots = "";
+  let arcs = "", dots = "", packets = "";
+  let i = 0;
   for (const [cc, list] of byCC) {
     const [lat, lon] = COUNTRY_LATLON[cc];
     const [x, y] = proj(lat, lon);
     const r = Math.min(9, 3.2 + Math.log2(list.length + 1) * 1.6);
     const inbound = list.filter((p) => p.inbound).length;
+    const outbound = list.length - inbound;
 
     if (self) {
       // quadratic arc bowed away from the straight line, so overlapping
-      // connections stay distinguishable
+      // connections stay distinguishable; path runs node → peer
       const mx = (self[0] + x) / 2, my = (self[1] + y) / 2;
       const dx = x - self[0], dy = y - self[1];
       const len = Math.hypot(dx, dy) || 1;
       const bow = Math.min(70, len * 0.22);
       const cx = mx - (dy / len) * bow, cy = my + (dx / len) * bow;
-      arcs += `<path class="arc" d="M${self[0].toFixed(1)} ${self[1].toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}"/>`;
+      const d = `M${self[0].toFixed(1)} ${self[1].toFixed(1)}Q${cx.toFixed(1)} ${cy.toFixed(1)} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      arcs += `<path class="arc" d="${d}"/>`;
+
+      // data packets travelling the arc: gold outward, green inward
+      const dur = (2.2 + len / 130).toFixed(2);
+      const begin = ((i * 0.53) % 3).toFixed(2);
+      if (outbound || !inbound) {
+        packets += `<circle class="packet out" r="2.1">
+          <animateMotion dur="${dur}s" begin="${begin}s" repeatCount="indefinite" path="${d}"/>
+        </circle>`;
+      }
+      if (inbound) {
+        packets += `<circle class="packet in" r="2.1">
+          <animateMotion dur="${dur}s" begin="${(+begin + 1.1).toFixed(2)}s" repeatCount="indefinite"
+            keyPoints="1;0" keyTimes="0;1" calcMode="linear" path="${d}"/>
+        </circle>`;
+      }
     }
     dots += `<circle class="peer-dot${inbound === list.length && list.length ? " inbound" : ""}"
-      cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}"
+      cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" data-r="${r.toFixed(1)}"
       data-cc="${cc}" data-n="${list.length}" data-in="${inbound}"/>`;
+    i++;
   }
 
   const selfMark = self ? `
-    <g class="self-mark" transform="translate(${self[0].toFixed(1)} ${self[1].toFixed(1)})">
+    <g class="self-mark" data-x="${self[0].toFixed(1)}" data-y="${self[1].toFixed(1)}"
+       transform="translate(${self[0].toFixed(1)} ${self[1].toFixed(1)})">
       <circle class="halo" r="14"/>
       <circle class="core" r="4.5"/>
     </g>` : "";
 
-  svg.innerHTML = `<g class="land">${land}</g><g class="arcs">${arcs}</g>${selfMark}<g class="dots">${dots}</g>`;
+  svg.innerHTML = `<g class="land">${land}</g><g class="arcs">${arcs}</g>` +
+    `<g class="packets">${packets}</g>${selfMark}<g class="dots">${dots}</g>`;
+  applyMapView(); // keep the current zoom across refreshes
 
   const located = peerData.peers.length - unlocated;
   $("map-legend").innerHTML = peerData.self ? `
@@ -825,11 +959,13 @@ function renderPeerMap() {
     <span><i class="key in"></i>inbound</span>
     <span class="muted">${located} of ${peerData.peers.length} peers located${
       unlocated ? ` · ${unlocated} without location (Tor / unknown)` : ""}</span>
+    <span class="muted">scroll to zoom · drag to pan</span>
     <button class="btn small" id="map-clear" style="margin-left:auto">Reset position</button>` : `
     <span><i class="key out"></i>outbound</span>
     <span><i class="key in"></i>inbound</span>
     <span class="muted">${located} of ${peerData.peers.length} peers located —
-      <b style="color:var(--accent)">click the map to place your node</b> and draw its connections</span>`;
+      <b style="color:var(--accent)">click the map to place your node</b> and draw its connections</span>
+    <span class="muted">scroll to zoom · drag to pan</span>`;
 
   const clearBtn = $("map-clear");
   if (clearBtn) clearBtn.addEventListener("click", async () => {
@@ -879,6 +1015,7 @@ $("peers-refresh").addEventListener("click", loadPeers);
 async function loadPeers() {
   const btn = $("peers-refresh");
   btn.disabled = true;
+  peersLoadedOnce = true;
   try {
     const resp = await api("GET", "/api/node/peers");
     const peers = resp.peers || [];

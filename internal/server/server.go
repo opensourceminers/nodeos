@@ -572,6 +572,10 @@ type soloStats struct {
 	ExpectedSeconds float64 `json:"expected_seconds"`
 	// OddsPerDay is the probability (0..1) of finding a block in 24h.
 	OddsPerDay float64 `json:"odds_per_day"`
+	// Syncing is true while the node cannot provide today's difficulty. A
+	// half-synced node reports the difficulty of its current sync height —
+	// years old and absurdly flattering — so no odds are computed from it.
+	Syncing bool `json:"syncing"`
 }
 
 func (s *Server) statusPayload(histSamples int) map[string]any {
@@ -579,11 +583,15 @@ func (s *Server) statusPayload(histSamples int) map[string]any {
 	nst := s.node.Status()
 
 	var solo soloStats
-	solo.NetworkDifficulty = nst.Difficulty
-	if nst.Difficulty > 0 && sum.TotalHashGH > 0 {
-		hashesPerBlock := nst.Difficulty * math.Pow(2, 32)
-		solo.ExpectedSeconds = hashesPerBlock / (sum.TotalHashGH * 1e9)
-		solo.OddsPerDay = 1 - math.Exp(-86400/solo.ExpectedSeconds)
+	synced := nst.Available && !nst.IBD && nst.Progress >= 0.9995
+	solo.Syncing = nst.Available && !synced
+	if synced {
+		solo.NetworkDifficulty = nst.Difficulty
+		if nst.Difficulty > 0 && sum.TotalHashGH > 0 {
+			hashesPerBlock := nst.Difficulty * math.Pow(2, 32)
+			solo.ExpectedSeconds = hashesPerBlock / (sum.TotalHashGH * 1e9)
+			solo.OddsPerDay = 1 - math.Exp(-86400/solo.ExpectedSeconds)
+		}
 	}
 
 	return map[string]any{
