@@ -563,6 +563,22 @@ service_ctl() {
   log "$action done for $id"
 }
 
+# lightning_rune: mint a fresh admin rune from the running CLN container and
+# store it where nodeosd (group nodeos) can read it. The rune is the ONLY
+# credential nodeosd holds; the RPC socket itself stays root-only.
+lightning_rune() {
+  systemctl is-active --quiet nodeos-svc-lightning.service \
+    || { log "Core Lightning is not running"; return 1; }
+  local out rune
+  out="$(podman exec nodeos-svc-lightning lightning-cli --network=bitcoin createrune 2>&1)" \
+    || { log "createrune failed: $out"; return 1; }
+  rune="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["rune"])' 2>/dev/null)"
+  [[ -n "$rune" ]] || { log "could not parse rune from: $out"; return 1; }
+  ( umask 027; printf '%s' "$rune" > /etc/nodeos/cln.rune )
+  chgrp nodeos /etc/nodeos/cln.rune 2>/dev/null || true
+  log "lightning access rune stored"
+}
+
 service_remove() {
   local id="$1" f
   [[ "$id" =~ ^[a-z0-9-]{1,32}$ ]] || { log "invalid service id"; return 1; }
@@ -595,6 +611,7 @@ process_queue() {
         service-install) service_install "${lines[1]:-}" ;;
         service-ctl)     service_ctl "${lines[1]:-}" "${lines[2]:-}" ;;
         service-remove)  service_remove "${lines[1]:-}" ;;
+        lightning-rune)  lightning_rune ;;
         *) log "unknown command: ${lines[0]:-<empty>}"; false ;;
       esac
     } >> "$QUEUE/$id.log" 2>&1 && touch "$QUEUE/$id.done" || touch "$QUEUE/$id.fail"
@@ -613,6 +630,7 @@ case "${1:-}" in
       service-install) shift; service_install "$@" ;;
       service-ctl)     shift; service_ctl "$@" ;;
       service-remove)  shift; service_remove "$@" ;;
+      lightning-rune)  lightning_rune ;;
       *) echo "usage: nodeos-admin run {node-install|node-config|self-update|service-install|service-ctl|service-remove} ..." >&2; exit 1 ;;
     esac ;;
   *) echo "usage: nodeos-admin {process-queue|run ...}" >&2; exit 1 ;;

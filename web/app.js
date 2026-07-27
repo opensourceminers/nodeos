@@ -178,6 +178,7 @@ $("nav").addEventListener("click", (e) => {
     t.classList.toggle("active", t.id === "tab-" + btn.dataset.tab));
   $("page-title").textContent = btn.querySelector(".lbl").textContent;
   $("sidebar").classList.remove("open"); // close the drawer on mobile
+  if (btn.dataset.tab === "lightning") loadLightning();
   if (snapshot) render();
 });
 
@@ -1022,6 +1023,154 @@ async function loadPeers() {
     btn.textContent = "Refresh peers";
   }
 }
+
+// ---------- lightning ----------
+
+function fmtSats(msat) {
+  return Math.floor((msat || 0) / 1000).toLocaleString();
+}
+
+async function loadLightning() {
+  let ln;
+  try {
+    ln = await api("GET", "/api/lightning");
+  } catch (err) {
+    $("ln-body").innerHTML = `<div class="empty fail">${esc(err.message)}</div>`;
+    return;
+  }
+  const body = $("ln-body");
+  const svcInstalled = svcData && (svcData.status || []).some((s) => s.id === "lightning" && s.installed);
+  const svcRunning = svcData && (svcData.status || []).some((s) => s.id === "lightning" && s.running);
+
+  if (!svcInstalled) {
+    body.innerHTML = `<div class="empty"><strong>Core Lightning is not installed</strong>
+      Install it on the Services page — this panel comes alive automatically.</div>`;
+    $("ln-actions").hidden = true;
+    $("ln-channels-panel").hidden = true;
+    return;
+  }
+  if (!ln.connected) {
+    body.innerHTML = `<div class="panel" style="text-align:center; padding:40px">
+      <div style="font-size:28px; margin-bottom:8px">⚡</div>
+      <p style="margin-bottom:16px">Core Lightning is ${svcRunning ? "running" : "installed"} —
+        connect the panel once to manage it from here.</p>
+      <button class="btn primary" id="ln-connect">Connect panel</button>
+      <div class="note" style="margin-top:10px">Mints an access rune via the privileged helper;
+        the RPC socket itself stays root-only.</div>
+    </div>`;
+    $("ln-actions").hidden = true;
+    $("ln-channels-panel").hidden = true;
+    $("ln-connect").addEventListener("click", async () => {
+      try {
+        await api("POST", "/api/lightning/connect");
+        toast("Connecting… rune is being minted", "ok");
+        setTimeout(loadLightning, 4000);
+      } catch (err) { toast(err.message, "err"); }
+    });
+    return;
+  }
+  if (!ln.available) {
+    body.innerHTML = `<div class="empty fail">${esc(ln.error || "Core Lightning is not answering")}</div>`;
+    $("ln-actions").hidden = true;
+    $("ln-channels-panel").hidden = true;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="hero">
+      <div class="hero-top">
+        <div style="min-width:0">
+          <div class="hero-label">Lightning node</div>
+          <div class="hero-value" style="font-size:30px">${esc(ln.alias || "–")}</div>
+          <div class="hero-sub" style="word-break:break-all">${esc(ln.id || "")}</div>
+        </div>
+        <div class="spacer" style="margin-left:auto"></div>
+        <div style="text-align:right">
+          <div class="hero-label" style="margin-bottom:8px">Status</div>
+          <div class="route ${ln.sync_warning ? "" : "own"}">
+            <span class="pulse ${ln.sync_warning ? "idle" : "live"}"></span>
+            <span class="dest">${ln.sync_warning ? "syncing" : "ready"}</span>
+          </div>
+        </div>
+      </div>
+      ${ln.sync_warning ? `<div class="hero-sub" style="color:var(--warning)">${esc(ln.sync_warning)}</div>` : ""}
+    </div>
+    <div class="tiles">
+      ${[
+        { i: "◈", l: "On-chain", v: `${fmtSats(ln.onchain_msat)} <small>sats</small>`,
+          s: ln.onchain_unconf_msat ? `+ ${fmtSats(ln.onchain_unconf_msat)} unconfirmed` : "" },
+        { i: "→", l: "Can send", v: `${fmtSats(ln.chan_spendable_msat)} <small>sats</small>` },
+        { i: "←", l: "Can receive", v: `${fmtSats(ln.chan_receivable_msat)} <small>sats</small>` },
+        { i: "⇄", l: "Channels", v: String((ln.channels || []).length),
+          s: `${ln.num_peers} peer${ln.num_peers === 1 ? "" : "s"} connected` },
+      ].map(tileHTML).join("")}
+    </div>`;
+
+  $("ln-actions").hidden = false;
+  const chPanel = $("ln-channels-panel");
+  const chs = ln.channels || [];
+  chPanel.hidden = false;
+  $("ln-channels").innerHTML = chs.length ? `
+    <div class="table-wrap"><table class="plain">
+      <thead><tr><th>Peer</th><th>State</th><th class="num">Capacity</th>
+        <th class="num">Ours</th><th class="num">Can send</th><th class="num">Can receive</th></tr></thead>
+      <tbody>${chs.map((c) => `
+        <tr>
+          <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis">
+            <span class="status-chip ${c.connected ? "online" : "offline"}" style="margin:0"><span class="dot"></span></span>
+            ${esc(c.short_id || c.peer_id.slice(0, 20) + "…")}</td>
+          <td>${esc(c.state.replace("CHANNELD_", "").toLowerCase())}</td>
+          <td class="num">${fmtSats(c.total_msat)}</td>
+          <td class="num">${fmtSats(c.ours_msat)}</td>
+          <td class="num">${fmtSats(c.spendable_msat)}</td>
+          <td class="num">${fmtSats(c.receivable_msat)}</td>
+        </tr>`).join("")}</tbody>
+    </table></div>` :
+    `<div class="empty">No channels yet. Fund the on-chain wallet, then open a channel —
+      channel management lands in the next iteration; until then use the CLI:
+      <code>podman exec nodeos-svc-lightning lightning-cli fundchannel …</code></div>`;
+}
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const old = btn.textContent;
+    btn.textContent = "Copied ✓";
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  } catch {
+    toast("Clipboard blocked — select and copy manually", "err");
+  }
+}
+
+$("ln-addr-btn").addEventListener("click", async () => {
+  try {
+    const d = await api("POST", "/api/lightning/address");
+    $("ln-addr").textContent = d.address;
+    $("ln-addr-out").hidden = false;
+  } catch (err) { toast(err.message, "err"); }
+});
+$("ln-addr-copy").addEventListener("click", (e) => copyText($("ln-addr").textContent, e.target));
+
+$("ln-inv-btn").addEventListener("click", async () => {
+  try {
+    const d = await api("POST", "/api/lightning/invoice", {
+      amount_sat: parseInt($("ln-inv-amount").value, 10) || 0,
+      description: $("ln-inv-desc").value || "NodeOS",
+    });
+    $("ln-inv").textContent = d.bolt11;
+    $("ln-inv-out").hidden = false;
+    $("ln-result").innerHTML = "";
+  } catch (err) {
+    $("ln-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+$("ln-inv-copy").addEventListener("click", (e) => copyText($("ln-inv").textContent, e.target));
+
+setInterval(() => {
+  if (document.querySelector("#tab-lightning.active") && $("auth-overlay").hidden && !document.hidden) {
+    loadLightning();
+  }
+}, 15000);
 
 // ---------- services ----------
 

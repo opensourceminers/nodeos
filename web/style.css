@@ -741,6 +741,21 @@ details[open] summary::before { content: "▾ "; }
 .auth-card .note { min-height: 1.5em; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
 .auth-card input { margin-top: var(--s3); text-align: center; }
 
+/* ---------- lightning ---------- */
+
+.addr-box {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-top: var(--s3);
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--s2) var(--s3);
+}
+.addr-box code {
+  flex: 1; word-break: break-all;
+  font-size: 11.5px; color: var(--ink-2);
+}
+
 /* ---------- footer ---------- */
 
 .site-footer {

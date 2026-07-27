@@ -44,8 +44,9 @@
   <nav id="nav">
     <button data-tab="dashboard" class="active"><span class="ico">▦</span><span class="lbl">Dashboard</span></button>
     <button data-tab="miners"><span class="ico">⛏</span><span class="lbl">Miners</span><span class="count" id="nav-miner-count"></span></button>
-    <button data-tab="mining"><span class="ico">⚡</span><span class="lbl">Solo mining</span></button>
+    <button data-tab="mining"><span class="ico">⚒</span><span class="lbl">Solo mining</span></button>
     <button data-tab="node"><span class="ico">⛓</span><span class="lbl">Bitcoin node</span></button>
+    <button data-tab="lightning"><span class="ico">⚡</span><span class="lbl">Lightning</span></button>
     <button data-tab="services"><span class="ico">◆</span><span class="lbl">Services</span><span class="count" id="nav-svc-count"></span></button>
     <button data-tab="system"><span class="ico">◱</span><span class="lbl">System</span></button>
     <button data-tab="alerts"><span class="ico">◔</span><span class="lbl">Events</span><span class="count" id="nav-alert-count"></span></button>
@@ -242,6 +243,47 @@
     </details>
   </div>
 
+</section>
+
+<!-- ============ LIGHTNING ============ -->
+<section class="tab" id="tab-lightning">
+  <div id="ln-body"><div class="empty">Checking Lightning…</div></div>
+
+  <div class="grid-2" id="ln-actions" hidden>
+    <div class="panel">
+      <h2>Receive on-chain</h2>
+      <button class="btn primary" id="ln-addr-btn">Generate address</button>
+      <div class="addr-box" id="ln-addr-out" hidden>
+        <code id="ln-addr"></code>
+        <button class="btn small" id="ln-addr-copy">Copy</button>
+      </div>
+      <div class="note">Funds a Lightning channel later — regular bech32 address from CLN's wallet.</div>
+    </div>
+    <div class="panel">
+      <h2>Create invoice</h2>
+      <div class="form-row">
+        <div>
+          <label for="ln-inv-amount">Amount (sats, empty = any)</label>
+          <input id="ln-inv-amount" type="number" min="1" placeholder="21000">
+        </div>
+        <div>
+          <label for="ln-inv-desc">Description</label>
+          <input id="ln-inv-desc" placeholder="NodeOS invoice">
+        </div>
+        <button class="btn primary" id="ln-inv-btn">Create</button>
+      </div>
+      <div class="addr-box" id="ln-inv-out" hidden>
+        <code id="ln-inv"></code>
+        <button class="btn small" id="ln-inv-copy">Copy</button>
+      </div>
+      <div class="result-list" id="ln-result"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="ln-channels-panel" hidden>
+    <h2>Channels</h2>
+    <div id="ln-channels"></div>
+  </div>
 </section>
 
 <!-- ============ SERVICES ============ -->

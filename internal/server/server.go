@@ -22,6 +22,7 @@ import (
 	"nodeos/internal/fleet"
 	"nodeos/internal/geoip"
 	"nodeos/internal/health"
+	"nodeos/internal/lightning"
 	"nodeos/internal/node"
 	"nodeos/internal/services"
 	"nodeos/internal/store"
@@ -41,10 +42,11 @@ type Deps struct {
 	Engine  *work.Engine
 	Auth    *auth.Manager
 	Admin   *admin.Client
-	Update   *update.Checker
-	Health   *health.Monitor
-	Store    *store.Store
-	Services *services.Manager
+	Update    *update.Checker
+	Health    *health.Monitor
+	Store     *store.Store
+	Services  *services.Manager
+	Lightning *lightning.Client
 	// ConfigPath is included (redacted) in support bundles.
 	ConfigPath string
 }
@@ -59,11 +61,12 @@ type Server struct {
 	engine  *work.Engine
 	auth    *auth.Manager
 	admin   *admin.Client
-	update   *update.Checker
-	health   *health.Monitor
-	store    *store.Store
-	services *services.Manager
-	cfgPath  string
+	update    *update.Checker
+	health    *health.Monitor
+	store     *store.Store
+	services  *services.Manager
+	lightning *lightning.Client
+	cfgPath   string
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
@@ -74,7 +77,8 @@ func New(d Deps) *Server {
 		cfg: d.Cfg, version: d.Version, started: time.Now(),
 		fleet: d.Fleet, node: d.Node, feed: d.Feed, engine: d.Engine,
 		auth: d.Auth, admin: d.Admin, update: d.Update,
-		health: d.Health, store: d.Store, services: d.Services, cfgPath: d.ConfigPath,
+		health: d.Health, store: d.Store, services: d.Services,
+		lightning: d.Lightning, cfgPath: d.ConfigPath,
 		sseSubs: map[chan []byte]struct{}{},
 	}
 	d.Fleet.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
@@ -250,6 +254,54 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]string{"logs": services.Logs(svc, 120)})
+	})
+
+	// ---- Lightning panel (Core Lightning via clnrest) ----
+
+	mux.HandleFunc("GET /api/lightning", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		writeJSON(w, s.lightning.Status(ctx))
+	})
+
+	// mints the access rune via the root helper (one-time connect step)
+	mux.HandleFunc("POST /api/lightning/connect", func(w http.ResponseWriter, r *http.Request) {
+		job, err := s.admin.Start("lightning-rune")
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		writeJSON(w, job)
+	})
+
+	mux.HandleFunc("POST /api/lightning/address", func(w http.ResponseWriter, r *http.Request) {
+		addr, err := s.lightning.NewAddress(r.Context())
+		if err != nil {
+			httpErr(w, 502, err)
+			return
+		}
+		writeJSON(w, map[string]string{"address": addr})
+	})
+
+	mux.HandleFunc("POST /api/lightning/invoice", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			AmountSat   int64  `json:"amount_sat"`
+			Description string `json:"description"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if len(req.Description) > 200 {
+			httpErr(w, 400, fmt.Errorf("description too long"))
+			return
+		}
+		bolt11, err := s.lightning.Invoice(r.Context(), req.AmountSat*1000, req.Description)
+		if err != nil {
+			httpErr(w, 502, err)
+			return
+		}
+		writeJSON(w, map[string]string{"bolt11": bolt11})
 	})
 
 	// ---- node detail: peers & bitcoin.conf settings ----

@@ -79,7 +79,7 @@ Image=docker.io/elementsproject/lightningd:v26.06.6
 ContainerName=nodeos-svc-lightning
 Network=host
 Volume=` + dataRoot + `/lightning:/root/.lightning
-Exec=--network=bitcoin --bitcoin-rpcconnect=127.0.0.1 --bitcoin-rpcport=8332 --bitcoin-rpcuser=nodeossvc --bitcoin-rpcpassword=@@RPCPASS@@ --bind-addr=0.0.0.0:9735 --log-level=info
+Exec=--network=bitcoin --bitcoin-rpcconnect=127.0.0.1 --bitcoin-rpcport=8332 --bitcoin-rpcuser=nodeossvc --bitcoin-rpcpassword=@@RPCPASS@@ --bind-addr=0.0.0.0:9735 --clnrest-host=127.0.0.1 --clnrest-port=3010 --clnrest-protocol=http --log-level=info
 
 [Service]
 Restart=on-failure

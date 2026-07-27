@@ -21,6 +21,7 @@ import (
 	"nodeos/internal/config"
 	"nodeos/internal/fleet"
 	"nodeos/internal/health"
+	"nodeos/internal/lightning"
 	"nodeos/internal/node"
 	"nodeos/internal/server"
 	"nodeos/internal/services"
@@ -145,7 +146,9 @@ func main() {
 	handler := server.New(server.Deps{
 		Cfg: cfg, Version: version, Fleet: fm, Node: nc, Feed: feed,
 		Engine: eng, Auth: authm, Admin: adm, Update: upd,
-		Health: hm, Store: st, Services: services.NewManager(), ConfigPath: *cfgPath,
+		Health: hm, Store: st, Services: services.NewManager(),
+		Lightning: lightning.NewClient(cfg.Lightning.RestURL, cfg.Lightning.RuneFile),
+		ConfigPath: *cfgPath,
 	}).Handler()
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: handler}

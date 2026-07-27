@@ -57,6 +57,12 @@ type Update struct {
 	Repo string `json:"repo"`
 }
 
+// Lightning configures the Core Lightning REST connection (clnrest).
+type Lightning struct {
+	RestURL  string `json:"rest_url"`
+	RuneFile string `json:"rune_file"`
+}
+
 // NodeSoftware holds the default versions offered when installing or
 // switching the Bitcoin node implementation.
 type NodeSoftware struct {
@@ -97,6 +103,7 @@ type Config struct {
 	Auth            Auth     `json:"auth"`
 	Update          Update   `json:"update"`
 	NodeSoftware    NodeSoftware `json:"node_software"`
+	Lightning       Lightning    `json:"lightning"`
 }
 
 func Default() Config {
@@ -125,6 +132,10 @@ func Default() Config {
 		NodeSoftware: NodeSoftware{
 			CoreVersion:  "29.0",
 			KnotsVersion: "29.3.knots20260508",
+		},
+		Lightning: Lightning{
+			RestURL:  "http://127.0.0.1:3010",
+			RuneFile: "/etc/nodeos/cln.rune",
 		},
 	}
 }
