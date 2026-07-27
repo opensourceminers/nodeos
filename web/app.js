@@ -1070,7 +1070,11 @@ async function loadLightning() {
     return;
   }
   if (!ln.available) {
-    body.innerHTML = `<div class="empty fail">${esc(ln.error || "Core Lightning is not answering")}</div>`;
+    const transient = (ln.error || "").includes("unreachable");
+    body.innerHTML = transient
+      ? `<div class="empty"><strong>Core Lightning is starting up</strong>
+          Waiting for the node — this page retries automatically every 15 s.</div>`
+      : `<div class="empty fail">${esc(ln.error || "Core Lightning is not answering")}</div>`;
     $("ln-actions").hidden = true;
     $("ln-channels-panel").hidden = true;
     return;

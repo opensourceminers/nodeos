@@ -64,9 +64,10 @@ func Catalog() []*Service {
 			ID:      "lightning",
 			Name:    "Core Lightning",
 			Tagline: "Lightning node (CLN)",
-			Description: "Runs a Core Lightning node against your Bitcoin node. RPC and data stay in " +
-				dataRoot + "/lightning.",
-			Requires: Requires{FullNode: true, Disk: 2},
+			Description: "Runs a Core Lightning node against your Bitcoin node. Works on a pruned " +
+				"node: Lightning only needs blocks from its own start onwards — just don't leave " +
+				"it offline longer than your prune window covers.",
+			Requires: Requires{Disk: 2},
 			Port:     9735,
 			units: map[string]string{
 				"nodeos-svc-lightning.container": `[Unit]
@@ -79,7 +80,9 @@ Image=docker.io/elementsproject/lightningd:v26.06.6
 ContainerName=nodeos-svc-lightning
 Network=host
 Volume=` + dataRoot + `/lightning:/root/.lightning
-Exec=--network=bitcoin --bitcoin-rpcconnect=127.0.0.1 --bitcoin-rpcport=8332 --bitcoin-rpcuser=nodeossvc --bitcoin-rpcpassword=@@RPCPASS@@ --bind-addr=0.0.0.0:9735 --clnrest-host=127.0.0.1 --clnrest-port=3010 --clnrest-protocol=http --log-level=info
+# bitcoin-retry-timeout: a node busy with IBD can take minutes to answer
+# getblock; the 60 s default makes lightningd declare itself broken and die
+Exec=--network=bitcoin --bitcoin-rpcconnect=127.0.0.1 --bitcoin-rpcport=8332 --bitcoin-rpcuser=nodeossvc --bitcoin-rpcpassword=@@RPCPASS@@ --bitcoin-retry-timeout=3600 --bind-addr=0.0.0.0:9735 --clnrest-host=127.0.0.1 --clnrest-port=3010 --clnrest-protocol=http --log-level=info
 
 [Service]
 Restart=on-failure
