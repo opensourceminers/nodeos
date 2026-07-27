@@ -74,7 +74,7 @@ After=network-online.target bitcoind.service
 Wants=network-online.target
 
 [Container]
-Image=docker.io/elementsproject/lightningd:v25.05
+Image=docker.io/elementsproject/lightningd:v26.06.6
 ContainerName=nodeos-svc-lightning
 Network=host
 Volume=` + dataRoot + `/lightning:/root/.lightning
@@ -213,10 +213,92 @@ WantedBy=multi-user.target
 			ID:      "btcpay",
 			Name:    "BTCPay Server",
 			Tagline: "accept Bitcoin payments",
-			Description: "Self-hosted payment processor on top of your node and Lightning. " +
-				"Planned — lands after the Lightning service is proven.",
-			Requires: Requires{FullNode: true, Disk: 5},
-			Planned:  true,
+			Description: "Self-hosted payment processor: database, NBXplorer and BTCPay as one " +
+				"service. Works on a pruned node; uses Core Lightning automatically when that " +
+				"service is installed.",
+			Requires: Requires{Disk: 5},
+			Port:     23000,
+			WebPath:  "/",
+			units: map[string]string{
+				"nodeos-svc-btcpay-db.container": `[Unit]
+Description=NodeOS service: BTCPay database (PostgreSQL)
+After=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:17.10
+ContainerName=nodeos-svc-btcpay-db
+Network=host
+Volume=` + dataRoot + `/btcpay/db:/var/lib/postgresql/data
+Environment=POSTGRES_USER=btcpay
+Environment=POSTGRES_PASSWORD=btcpay-local
+# maintenance DB named after the user: NBXplorer and BTCPay both connect to
+# it (Npgsql default) when creating their own databases on first start
+Environment=POSTGRES_DB=btcpay
+Exec=-p 5433 -c listen_addresses=127.0.0.1
+
+[Service]
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+`,
+				"nodeos-svc-btcpay-nbx.container": `[Unit]
+Description=NodeOS service: NBXplorer (chain indexer for BTCPay)
+After=network-online.target nodeos-svc-btcpay-db.service bitcoind.service
+Wants=nodeos-svc-btcpay-db.service
+
+[Container]
+Image=docker.io/nicolasdorier/nbxplorer:2.6.9
+ContainerName=nodeos-svc-btcpay-nbx
+Network=host
+Volume=` + dataRoot + `/btcpay/nbxplorer:/datadir
+Environment=NBXPLORER_DATADIR=/datadir
+Environment=NBXPLORER_NETWORK=mainnet
+Environment=NBXPLORER_CHAINS=btc
+Environment=NBXPLORER_BTCRPCURL=http://127.0.0.1:8332/
+Environment=NBXPLORER_BTCRPCUSER=nodeossvc
+Environment=NBXPLORER_BTCRPCPASSWORD=@@RPCPASS@@
+Environment=NBXPLORER_BTCNODEENDPOINT=127.0.0.1:8333
+Environment=NBXPLORER_BIND=127.0.0.1:24444
+Environment=NBXPLORER_NOAUTH=1
+Environment=NBXPLORER_POSTGRES=Host=127.0.0.1;Port=5433;Database=nbxplorer;Username=btcpay;Password=btcpay-local
+
+[Service]
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+`,
+				"nodeos-svc-btcpay-web.container": `[Unit]
+Description=NodeOS service: BTCPay Server
+After=network-online.target nodeos-svc-btcpay-nbx.service
+Wants=nodeos-svc-btcpay-nbx.service
+
+[Container]
+Image=docker.io/btcpayserver/btcpayserver:2.4.1
+ContainerName=nodeos-svc-btcpay-web
+Network=host
+Volume=` + dataRoot + `/btcpay/btcpay:/datadir
+Volume=` + dataRoot + `/lightning:/etc/lightning
+Environment=BTCPAY_DATADIR=/datadir
+Environment=BTCPAY_NETWORK=mainnet
+Environment=BTCPAY_CHAINS=btc
+Environment=BTCPAY_BIND=0.0.0.0:23000
+Environment=BTCPAY_ROOTPATH=/
+Environment=BTCPAY_BTCEXPLORERURL=http://127.0.0.1:24444/
+Environment=BTCPAY_POSTGRES=Host=127.0.0.1;Port=5433;Database=btcpayserver;Username=btcpay;Password=btcpay-local
+Environment=BTCPAY_BTCLIGHTNING=type=clightning;server=unix:///etc/lightning/bitcoin/lightning-rpc
+
+[Service]
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
+`,
+			},
 		},
 	}
 }

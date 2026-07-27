@@ -460,7 +460,7 @@ self_update() {
 # nodeosd stages unit files; this side re-validates every line before any of
 # it reaches systemd. The allowlists below are the trust boundary.
 
-SVC_IMAGE_RE='^Image=docker\.io/(elementsproject/lightningd|getumbrel/electrs|mempool/(backend|frontend)|library/mariadb):[A-Za-z0-9._-]+$'
+SVC_IMAGE_RE='^Image=docker\.io/(elementsproject/lightningd|getumbrel/electrs|mempool/(backend|frontend)|library/mariadb|library/postgres|nicolasdorier/nbxplorer|btcpayserver/btcpayserver):[A-Za-z0-9._-]+$'
 SVC_KEY_RE='^(\[(Unit|Container|Service|Install)\]|(Description|After|Wants|Requires|Environment|Exec)=.*|ContainerName=nodeos-svc-[a-z0-9-]+|Network=host|Restart=(no|on-failure|always)|RestartSec=[0-9]+|WantedBy=multi-user\.target)$'
 SVC_VOL_RE='^Volume=/var/lib/nodeos-services/[A-Za-z0-9/_-]+:[A-Za-z0-9/._-]+(:ro)?$'
 

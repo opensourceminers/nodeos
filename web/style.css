@@ -546,6 +546,19 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
 .status-chip.warn { color: var(--warning); }
 .status-chip.warn .dot { background: var(--warning); }
 
+/* service cards: uniform rhythm, actions pinned to the bottom edge */
+.svc-card { display: flex; flex-direction: column; }
+.svc-card .svc-ico { font-size: 17px; width: 22px; text-align: center; flex: 0 0 22px; }
+.svc-card .svc-desc { margin: 0; flex: 1; }
+.svc-card .dest-line { border-top: none; padding-top: 0; margin-top: var(--s3); }
+.svc-card .actions {
+  opacity: 1;
+  margin-top: var(--s4);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--grid);
+  flex-wrap: wrap;
+}
+
 /* miner table view */
 table.plain { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.plain th {

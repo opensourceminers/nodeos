@@ -1080,15 +1080,15 @@ function renderServices() {
       ? `<a class="btn small" href="http://${location.hostname}:${c.port}${c.web_path}" target="_blank" rel="noopener">Open ↗</a>` : "";
 
     return `
-    <div class="miner-card">
+    <div class="miner-card svc-card">
       <div class="top">
-        <span style="font-size:17px">${SVC_ICON[c.id] || "◆"}</span>
+        <span class="svc-ico">${SVC_ICON[c.id] || "◆"}</span>
         <span class="name">${esc(c.name)}</span>
         ${chip}
       </div>
-      <div class="note" style="margin:0 0 10px">${esc(c.description)}</div>
-      ${warns.length ? `<div class="dest-line fallback" style="margin-bottom:8px"><span class="val">${esc(warns.join(" · "))}</span></div>` : ""}
-      <div class="actions" style="opacity:1">${actions}${openLink}</div>
+      <div class="note svc-desc">${esc(c.description)}</div>
+      ${warns.length ? `<div class="dest-line fallback"><span class="val">${esc(warns.join(" · "))}</span></div>` : ""}
+      <div class="actions">${actions}${openLink}</div>
     </div>`;
   }).join("");
 
