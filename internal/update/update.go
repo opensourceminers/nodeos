@@ -27,13 +27,16 @@ type Checker struct {
 	DataDir string
 	Admin   *admin.Client
 
-	http *http.Client
+	// apiBase is the GitHub API root; tests point it at a local server.
+	apiBase string
+	http    *http.Client
 }
 
 func New(repo, current, dataDir string, adm *admin.Client) *Checker {
 	return &Checker{
 		Repo: repo, Current: current, DataDir: dataDir, Admin: adm,
-		http: &http.Client{Timeout: 60 * time.Second},
+		apiBase: "https://api.github.com",
+		http:    &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -55,7 +58,7 @@ func (c *Checker) assetName() string {
 // least its releases) is public — a 404 comes back as a friendly error.
 func (c *Checker) Check(ctx context.Context) (Info, error) {
 	info := Info{Current: c.Current}
-	url := "https://api.github.com/repos/" + c.Repo + "/releases/latest"
+	url := c.apiBase + "/repos/" + c.Repo + "/releases/latest"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return info, err

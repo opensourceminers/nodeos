@@ -32,7 +32,13 @@ import (
 	"nodeos/internal/work"
 )
 
-const version = "0.4.0"
+// version is overridable at build time:
+//
+//	go build -ldflags "-X main.version=0.4.1"
+//
+// Release builds set it from the git tag; the default is what a plain
+// `go build` produces.
+var version = "0.4.0"
 
 func main() {
 	var (

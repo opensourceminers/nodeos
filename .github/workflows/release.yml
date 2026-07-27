@@ -26,8 +26,12 @@ jobs:
       - name: Build
         run: |
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/nodeosd-linux-amd64 ./cmd/nodeosd
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o dist/nodeosd-linux-arm64 ./cmd/nodeosd
+          # the tag is the version the running daemon reports, so the
+          # self-updater compares against what was actually released
+          VERSION="${GITHUB_REF_NAME#v}"
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/nodeosd-linux-amd64 ./cmd/nodeosd
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/nodeosd-linux-arm64 ./cmd/nodeosd
           cd dist && sha256sum nodeosd-linux-amd64 nodeosd-linux-arm64 > SHA256SUMS
 
       - name: Create release
