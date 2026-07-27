@@ -23,6 +23,7 @@ import (
 	"nodeos/internal/health"
 	"nodeos/internal/node"
 	"nodeos/internal/server"
+	"nodeos/internal/services"
 	"nodeos/internal/sim"
 	"nodeos/internal/store"
 	"nodeos/internal/tlscert"
@@ -144,7 +145,7 @@ func main() {
 	handler := server.New(server.Deps{
 		Cfg: cfg, Version: version, Fleet: fm, Node: nc, Feed: feed,
 		Engine: eng, Auth: authm, Admin: adm, Update: upd,
-		Health: hm, Store: st, ConfigPath: *cfgPath,
+		Health: hm, Store: st, Services: services.NewManager(), ConfigPath: *cfgPath,
 	}).Handler()
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: handler}

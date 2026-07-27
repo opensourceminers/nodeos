@@ -456,6 +456,130 @@ self_update() {
   systemctl restart nodeosd
 }
 
+# ---------- container services (Podman Quadlet) ----------
+# nodeosd stages unit files; this side re-validates every line before any of
+# it reaches systemd. The allowlists below are the trust boundary.
+
+SVC_IMAGE_RE='^Image=docker\.io/(elementsproject/lightningd|getumbrel/electrs|mempool/(backend|frontend)|library/mariadb):[A-Za-z0-9._-]+$'
+SVC_KEY_RE='^(\[(Unit|Container|Service|Install)\]|(Description|After|Wants|Requires|Environment|Exec)=.*|ContainerName=nodeos-svc-[a-z0-9-]+|Network=host|Restart=(no|on-failure|always)|RestartSec=[0-9]+|WantedBy=multi-user\.target)$'
+SVC_VOL_RE='^Volume=/var/lib/nodeos-services/[A-Za-z0-9/_-]+:[A-Za-z0-9/._-]+(:ro)?$'
+
+svc_podman_ready() {
+  command -v podman >/dev/null 2>&1 && return 0
+  log "installing podman"
+  export DEBIAN_FRONTEND=noninteractive
+  disable_cdrom_sources 2>/dev/null || true
+  apt-get update -qq && apt-get install -y -qq podman >/dev/null || { log "podman install failed"; return 1; }
+}
+
+# svc_rpc_cred: ensure the shared rpcauth credential for services exists.
+# Password stays root-only; @@RPCPASS@@ in staged units is replaced here.
+svc_rpc_cred() {
+  local passfile=/etc/nodeos/svc-rpc.pass
+  if [[ ! -f "$passfile" ]]; then
+    [[ -f /etc/bitcoin/bitcoin.conf ]] || { log "no bitcoin.conf — install the node first"; return 1; }
+    local pw salt hmac
+    pw="$(openssl rand -hex 24)" || return 1
+    salt="$(openssl rand -hex 16)"
+    hmac="$(printf '%s' "$pw" | openssl dgst -sha256 -hmac "$salt" -r | cut -d' ' -f1)"
+    ( umask 077; printf '%s' "$pw" > "$passfile" )
+    sed -i '/^rpcauth=nodeossvc:/d' /etc/bitcoin/bitcoin.conf
+    echo "rpcauth=nodeossvc:${salt}\$${hmac}" >> /etc/bitcoin/bitcoin.conf
+    log "created service RPC credential (rpcauth=nodeossvc), restarting bitcoind"
+    systemctl restart bitcoind || { log "bitcoind restart failed"; return 1; }
+  fi
+  SVC_RPCPASS="$(cat "$passfile")"
+}
+
+svc_validate_unit() {
+  local f="$1" line
+  grep -q "$( printf '^Image=' )" "$f" || { [[ "$f" == *".container" ]] && { log "no Image in $(basename "$f")"; return 1; }; }
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^# ]] && continue
+    case "$line" in
+      Image=*)
+        [[ "$line" =~ $SVC_IMAGE_RE ]] || { log "image not allowlisted: $line"; return 1; } ;;
+      Volume=*)
+        [[ "$line" =~ $SVC_VOL_RE ]] || { log "volume not allowed: $line"; return 1; } ;;
+      PodmanArgs=*|Privileged=*|SecurityLabel*|Mount=*|HostDevice=*|AddCapability=*|User=*|Sysctl=*)
+        log "forbidden key: $line"; return 1 ;;
+      *)
+        [[ "$line" =~ $SVC_KEY_RE ]] || { log "unexpected line: $line"; return 1 ;} ;;
+    esac
+  done < "$f"
+}
+
+service_install() {
+  local id="$1"
+  [[ "$id" =~ ^[a-z0-9-]{1,32}$ ]] || { log "invalid service id"; return 1; }
+  local stage="/var/lib/nodeos/services-staging/$id"
+  [[ -d "$stage" ]] || { log "nothing staged for $id"; return 1; }
+
+  svc_podman_ready || return 1
+  # only wire RPC credentials when a unit actually asks for them
+  if grep -rq '@@RPCPASS@@' "$stage"; then
+    svc_rpc_cred || return 1
+  fi
+
+  local f base units=()
+  for f in "$stage"/*.container; do
+    [[ -f "$f" ]] || { log "no unit files staged"; return 1; }
+    base="$(basename "$f")"
+    [[ "$base" =~ ^nodeos-svc-[a-z0-9-]+\.container$ ]] || { log "bad unit name: $base"; return 1; }
+    svc_validate_unit "$f" || return 1
+    units+=("$base")
+  done
+
+  mkdir -p /etc/containers/systemd /var/lib/nodeos-services
+  for base in "${units[@]}"; do
+    # substitute secrets root-side, then install
+    sed "s|@@RPCPASS@@|${SVC_RPCPASS:-}|g" "$stage/$base" > "/etc/containers/systemd/$base"
+    chmod 644 "/etc/containers/systemd/$base"
+    # pre-create volume directories referenced by this unit
+    grep -oE '^Volume=/var/lib/nodeos-services/[A-Za-z0-9/_-]+' "$stage/$base" \
+      | cut -d= -f2 | while read -r d; do mkdir -p "$d"; done
+    log "installed unit $base"
+  done
+  systemctl daemon-reload
+  for base in "${units[@]}"; do
+    log "starting ${base%.container}.service (image pull may take a while)"
+    systemctl start "${base%.container}.service" || log "start failed: ${base%.container} — see its journal"
+  done
+  log "service $id installed"
+}
+
+service_ctl() {
+  local id="$1" action="$2" f
+  [[ "$id" =~ ^[a-z0-9-]{1,32}$ ]] || { log "invalid service id"; return 1; }
+  case "$action" in start|stop|restart) ;; *) log "invalid action"; return 1 ;; esac
+  local found=0
+  for f in /etc/containers/systemd/nodeos-svc-*.container; do
+    [[ -f "$f" ]] || continue
+    [[ "$(basename "$f")" == nodeos-svc-${id}*.container ]] || continue
+    found=1
+    systemctl "$action" "$(basename "${f%.container}").service" || true
+  done
+  [[ $found -eq 1 ]] || { log "service $id is not installed"; return 1; }
+  log "$action done for $id"
+}
+
+service_remove() {
+  local id="$1" f
+  [[ "$id" =~ ^[a-z0-9-]{1,32}$ ]] || { log "invalid service id"; return 1; }
+  local found=0
+  for f in /etc/containers/systemd/nodeos-svc-*.container; do
+    [[ -f "$f" ]] || continue
+    [[ "$(basename "$f")" == nodeos-svc-${id}*.container ]] || continue
+    found=1
+    systemctl stop "$(basename "${f%.container}").service" 2>/dev/null || true
+    rm -f "$f"
+    log "removed $(basename "$f")"
+  done
+  [[ $found -eq 1 ]] || { log "service $id is not installed"; return 1; }
+  systemctl daemon-reload
+  log "service $id removed (data kept in /var/lib/nodeos-services/$id — delete manually if wanted)"
+}
+
 process_queue() {
   shopt -s nullglob
   local cmd id
@@ -465,9 +589,12 @@ process_queue() {
     mv "$cmd" "$QUEUE/$id.run"
     {
       case "${lines[0]:-}" in
-        node-install) node_install "${lines[1]:-}" "${lines[2]:-}" "${lines[3]:-}" ;;
-        node-config)  node_config "${lines[@]:1}" ;;
-        self-update)  self_update ;;
+        node-install)    node_install "${lines[1]:-}" "${lines[2]:-}" "${lines[3]:-}" ;;
+        node-config)     node_config "${lines[@]:1}" ;;
+        self-update)     self_update ;;
+        service-install) service_install "${lines[1]:-}" ;;
+        service-ctl)     service_ctl "${lines[1]:-}" "${lines[2]:-}" ;;
+        service-remove)  service_remove "${lines[1]:-}" ;;
         *) log "unknown command: ${lines[0]:-<empty>}"; false ;;
       esac
     } >> "$QUEUE/$id.log" 2>&1 && touch "$QUEUE/$id.done" || touch "$QUEUE/$id.fail"
@@ -480,10 +607,13 @@ case "${1:-}" in
   process-queue) process_queue ;;
   run) shift
     case "${1:-}" in
-      node-install) shift; node_install "$@" ;;
-      node-config)  shift; node_config "$@" ;;
-      self-update)  self_update ;;
-      *) echo "usage: nodeos-admin run {node-install|node-config|self-update} ..." >&2; exit 1 ;;
+      node-install)    shift; node_install "$@" ;;
+      node-config)     shift; node_config "$@" ;;
+      self-update)     self_update ;;
+      service-install) shift; service_install "$@" ;;
+      service-ctl)     shift; service_ctl "$@" ;;
+      service-remove)  shift; service_remove "$@" ;;
+      *) echo "usage: nodeos-admin run {node-install|node-config|self-update|service-install|service-ctl|service-remove} ..." >&2; exit 1 ;;
     esac ;;
   *) echo "usage: nodeos-admin {process-queue|run ...}" >&2; exit 1 ;;
 esac

@@ -23,6 +23,7 @@ import (
 	"nodeos/internal/geoip"
 	"nodeos/internal/health"
 	"nodeos/internal/node"
+	"nodeos/internal/services"
 	"nodeos/internal/store"
 	"nodeos/internal/support"
 	"nodeos/internal/update"
@@ -40,9 +41,10 @@ type Deps struct {
 	Engine  *work.Engine
 	Auth    *auth.Manager
 	Admin   *admin.Client
-	Update  *update.Checker
-	Health  *health.Monitor
-	Store   *store.Store
+	Update   *update.Checker
+	Health   *health.Monitor
+	Store    *store.Store
+	Services *services.Manager
 	// ConfigPath is included (redacted) in support bundles.
 	ConfigPath string
 }
@@ -57,10 +59,11 @@ type Server struct {
 	engine  *work.Engine
 	auth    *auth.Manager
 	admin   *admin.Client
-	update  *update.Checker
-	health  *health.Monitor
-	store   *store.Store
-	cfgPath string
+	update   *update.Checker
+	health   *health.Monitor
+	store    *store.Store
+	services *services.Manager
+	cfgPath  string
 
 	sseMu   sync.Mutex
 	sseSubs map[chan []byte]struct{}
@@ -71,7 +74,7 @@ func New(d Deps) *Server {
 		cfg: d.Cfg, version: d.Version, started: time.Now(),
 		fleet: d.Fleet, node: d.Node, feed: d.Feed, engine: d.Engine,
 		auth: d.Auth, admin: d.Admin, update: d.Update,
-		health: d.Health, store: d.Store, cfgPath: d.ConfigPath,
+		health: d.Health, store: d.Store, services: d.Services, cfgPath: d.ConfigPath,
 		sseSubs: map[chan []byte]struct{}{},
 	}
 	d.Fleet.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
@@ -180,6 +183,73 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})
+	})
+
+	// ---- curated container services ----
+
+	mux.HandleFunc("GET /api/services", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{
+			"catalog":          services.Catalog(),
+			"status":           s.services.StatusAll(),
+			"helper_available": s.admin.Available(),
+			"job":              s.admin.Current(),
+			"pruned":           s.node.Status().Pruned,
+		})
+	})
+
+	mux.HandleFunc("POST /api/services/{id}/install", func(w http.ResponseWriter, r *http.Request) {
+		svc := services.ByID(r.PathValue("id"))
+		if svc == nil || svc.Planned {
+			httpErr(w, 404, fmt.Errorf("unknown or not yet installable service"))
+			return
+		}
+		if err := services.Stage(s.cfg.DataDir, svc); err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		job, err := s.admin.Start("service-install", svc.ID)
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		s.services.Invalidate()
+		s.feed.Add(alerts.Info, "service_install", "", fmt.Sprintf("Installing %s…", svc.Name))
+		writeJSON(w, job)
+	})
+
+	mux.HandleFunc("POST /api/services/{id}/{action}", func(w http.ResponseWriter, r *http.Request) {
+		svc := services.ByID(r.PathValue("id"))
+		action := r.PathValue("action")
+		if svc == nil {
+			httpErr(w, 404, fmt.Errorf("unknown service"))
+			return
+		}
+		var job any
+		var err error
+		switch action {
+		case "start", "stop", "restart":
+			job, err = s.admin.Start("service-ctl", svc.ID, action)
+		case "remove":
+			job, err = s.admin.Start("service-remove", svc.ID)
+		default:
+			httpErr(w, 404, fmt.Errorf("unknown action %q", action))
+			return
+		}
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		s.services.Invalidate()
+		writeJSON(w, job)
+	})
+
+	mux.HandleFunc("GET /api/services/{id}/logs", func(w http.ResponseWriter, r *http.Request) {
+		svc := services.ByID(r.PathValue("id"))
+		if svc == nil {
+			httpErr(w, 404, fmt.Errorf("unknown service"))
+			return
+		}
+		writeJSON(w, map[string]string{"logs": services.Logs(svc, 120)})
 	})
 
 	// ---- node detail: peers & bitcoin.conf settings ----
@@ -576,6 +646,7 @@ func (s *Server) statusPayload(histSamples int) map[string]any {
 		"solo":      solo,
 		"work":      s.engine.Status(),
 		"system":    s.health.Last(),
+		"services":  s.services.StatusAll(),
 		"miners":    s.fleet.Miners(histSamples),
 		"scan":      s.fleet.ScanStatus(),
 	}

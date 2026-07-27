@@ -233,6 +233,7 @@ async function loadAll() {
   } catch {}
   refreshNodeSetup();
   loadNodeConfig();
+  loadServices();
   loadPeers(); // the dashboard map greets the user alive, not empty
   connectSSE();
 }
@@ -1021,6 +1022,120 @@ async function loadPeers() {
     btn.textContent = "Refresh peers";
   }
 }
+
+// ---------- services ----------
+
+let svcData = null; // /api/services payload
+let svcLogsFor = null;
+
+async function loadServices() {
+  try {
+    svcData = await api("GET", "/api/services");
+    renderServices();
+  } catch (err) {
+    $("svc-grid").innerHTML = `<div class="empty fail">${esc(err.message)}</div>`;
+  }
+}
+
+const SVC_ICON = { lightning: "⚡", electrs: "🔌", mempool: "◱", btcpay: "₿" };
+
+function renderServices() {
+  if (!svcData) return;
+  const stById = {};
+  for (const st of svcData.status || []) stById[st.id] = st;
+  const installedCount = (svcData.status || []).filter((s) => s.installed).length;
+  $("nav-svc-count").textContent = installedCount ? `(${installedCount})` : "";
+
+  $("svc-grid").innerHTML = (svcData.catalog || []).map((c) => {
+    const st = stById[c.id] || {};
+    let chip;
+    if (c.planned) chip = `<span class="badge">planned</span>`;
+    else if (!st.installed) chip = `<span class="badge">not installed</span>`;
+    else if (st.running) chip = `<span class="status-chip online"><span class="dot"></span>running</span>`;
+    else if (st.degraded) chip = `<span class="status-chip warn"><span class="dot"></span>starting / degraded</span>`;
+    else chip = `<span class="status-chip offline"><span class="dot"></span>stopped</span>`;
+
+    const warns = [];
+    if (c.requires.full_node && svcData.pruned) {
+      warns.push(`needs a full node — yours is pruned`);
+    }
+    if (c.requires.disk_gb) warns.push(`~${c.requires.disk_gb} GB disk`);
+
+    let actions = "";
+    if (!c.planned) {
+      if (!st.installed) {
+        actions = `<button class="btn primary small" data-svc="${c.id}" data-act="install"
+          ${svcData.helper_available ? "" : "disabled"}>Install</button>`;
+      } else {
+        actions = `
+          ${st.running || st.degraded
+            ? `<button class="btn small" data-svc="${c.id}" data-act="stop">Stop</button>
+               <button class="btn small" data-svc="${c.id}" data-act="restart">Restart</button>`
+            : `<button class="btn small primary" data-svc="${c.id}" data-act="start">Start</button>`}
+          <button class="btn small" data-svc="${c.id}" data-act="logs">Logs</button>
+          <button class="btn small danger" data-svc="${c.id}" data-act="remove">Remove</button>`;
+      }
+    }
+    const openLink = !c.planned && st.running && c.web_path
+      ? `<a class="btn small" href="http://${location.hostname}:${c.port}${c.web_path}" target="_blank" rel="noopener">Open ↗</a>` : "";
+
+    return `
+    <div class="miner-card">
+      <div class="top">
+        <span style="font-size:17px">${SVC_ICON[c.id] || "◆"}</span>
+        <span class="name">${esc(c.name)}</span>
+        ${chip}
+      </div>
+      <div class="note" style="margin:0 0 10px">${esc(c.description)}</div>
+      ${warns.length ? `<div class="dest-line fallback" style="margin-bottom:8px"><span class="val">${esc(warns.join(" · "))}</span></div>` : ""}
+      <div class="actions" style="opacity:1">${actions}${openLink}</div>
+    </div>`;
+  }).join("");
+
+  renderSvcJob(svcData.job);
+}
+
+function renderSvcJob(job) {
+  const panel = $("svc-job-panel");
+  if (!job || !job.log || !job.log.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const chip = $("svc-job-state");
+  chip.className = "status-chip " + (job.running ? "warn" : job.ok ? "online" : "offline");
+  chip.innerHTML = `<span class="dot"></span>${job.running ? esc(job.name) + " running" : job.ok ? "done" : "failed"}`;
+  $("svc-job-log").textContent = job.log.join("\n");
+  $("svc-job-log").scrollTop = $("svc-job-log").scrollHeight;
+}
+
+$("svc-grid").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-svc]");
+  if (!btn) return;
+  const id = btn.dataset.svc, act = btn.dataset.act;
+  try {
+    if (act === "logs") {
+      const d = await api("GET", `/api/services/${id}/logs`);
+      $("svc-job-panel").hidden = false;
+      $("svc-job-state").className = "status-chip online";
+      $("svc-job-state").innerHTML = `<span class="dot"></span>${esc(id)} logs`;
+      $("svc-job-log").textContent = d.logs || "(empty)";
+      return;
+    }
+    if (act === "remove" && !confirm(`Remove ${id}? Its data under /var/lib/nodeos-services stays on disk.`)) return;
+    btn.disabled = true;
+    await api("POST", `/api/services/${id}/${act}`);
+    toast(`${id}: ${act} started`, "ok");
+    setTimeout(loadServices, 1500);
+  } catch (err) {
+    toast(err.message, "err");
+    btn.disabled = false;
+  }
+});
+
+// keep the services page fresh while a job runs
+setInterval(() => {
+  if (document.querySelector("#tab-services.active") && $("auth-overlay").hidden && !document.hidden) {
+    loadServices();
+  }
+}, 5000);
 
 // ---------- node settings (bitcoin.conf) ----------
 

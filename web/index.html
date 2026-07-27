@@ -46,6 +46,7 @@
     <button data-tab="miners"><span class="ico">⛏</span><span class="lbl">Miners</span><span class="count" id="nav-miner-count"></span></button>
     <button data-tab="mining"><span class="ico">⚡</span><span class="lbl">Solo mining</span></button>
     <button data-tab="node"><span class="ico">⛓</span><span class="lbl">Bitcoin node</span></button>
+    <button data-tab="services"><span class="ico">◆</span><span class="lbl">Services</span><span class="count" id="nav-svc-count"></span></button>
     <button data-tab="system"><span class="ico">◱</span><span class="lbl">System</span></button>
     <button data-tab="alerts"><span class="ico">◔</span><span class="lbl">Events</span><span class="count" id="nav-alert-count"></span></button>
     <button data-tab="settings"><span class="ico">⚙</span><span class="lbl">Settings</span></button>
@@ -241,6 +242,18 @@
     </details>
   </div>
 
+</section>
+
+<!-- ============ SERVICES ============ -->
+<section class="tab" id="tab-services">
+  <div class="miner-grid" id="svc-grid"><div class="empty">Loading services…</div></div>
+  <div class="panel" id="svc-job-panel" hidden>
+    <div class="panel-head">
+      <h2>Service job</h2>
+      <span class="status-chip warn" id="svc-job-state"><span class="dot"></span>running</span>
+    </div>
+    <pre class="work-log" id="svc-job-log">–</pre>
+  </div>
 </section>
 
 <!-- ============ SYSTEM ============ -->
