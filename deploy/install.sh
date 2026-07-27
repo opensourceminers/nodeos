@@ -493,7 +493,7 @@ svc_rpc_cred() {
 
 svc_validate_unit() {
   local f="$1" line
-  grep -q "$( printf '^Image=' )" "$f" || { [[ "$f" == *".container" ]] && { log "no Image in $(basename "$f")"; return 1; }; }
+  grep -q '^Image=' "$f" || { log "no Image= in $(basename "$f")"; return 1; }
   while IFS= read -r line; do
     [[ -z "$line" || "$line" =~ ^# ]] && continue
     case "$line" in
@@ -521,22 +521,34 @@ service_install() {
     svc_rpc_cred || return 1
   fi
 
+  # Copy every staged unit into a root-owned scratch dir FIRST, then validate
+  # and install only from there. The staging dir is writable by nodeos, so
+  # validating the original and reading it again afterwards would leave a
+  # window to swap the contents in between (time-of-check/time-of-use).
+  local scratch
+  scratch="$(mktemp -d /run/nodeos-svc.XXXXXX)" || return 1
+  chmod 700 "$scratch"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$scratch'" RETURN
+
   local f base units=()
   for f in "$stage"/*.container; do
     [[ -f "$f" ]] || { log "no unit files staged"; return 1; }
+    [[ -L "$f" ]] && { log "staged unit is a symlink: $(basename "$f")"; return 1; }
     base="$(basename "$f")"
     [[ "$base" =~ ^nodeos-svc-[a-z0-9-]+\.container$ ]] || { log "bad unit name: $base"; return 1; }
-    svc_validate_unit "$f" || return 1
+    cat -- "$f" > "$scratch/$base" || return 1
+    svc_validate_unit "$scratch/$base" || return 1
     units+=("$base")
   done
 
   mkdir -p /etc/containers/systemd /var/lib/nodeos-services
   for base in "${units[@]}"; do
-    # substitute secrets root-side, then install
-    sed "s|@@RPCPASS@@|${SVC_RPCPASS:-}|g" "$stage/$base" > "/etc/containers/systemd/$base"
+    # substitute secrets root-side, from the validated copy only
+    sed "s|@@RPCPASS@@|${SVC_RPCPASS:-}|g" "$scratch/$base" > "/etc/containers/systemd/$base"
     chmod 644 "/etc/containers/systemd/$base"
     # pre-create volume directories referenced by this unit
-    grep -oE '^Volume=/var/lib/nodeos-services/[A-Za-z0-9/_-]+' "$stage/$base" \
+    grep -oE '^Volume=/var/lib/nodeos-services/[A-Za-z0-9/_-]+' "$scratch/$base" \
       | cut -d= -f2 | while read -r d; do mkdir -p "$d"; done
     log "installed unit $base"
   done

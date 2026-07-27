@@ -21,12 +21,17 @@ import (
 // that fails stops the rollout — the whole point is that a bad image costs
 // one miner, not the fleet.
 
-const (
+// Timings are variables so tests can run a rollout in milliseconds.
+var (
 	// how long a device may take to reboot and report hashrate again
 	verifyTimeout  = 5 * time.Minute
 	verifyInterval = 10 * time.Second
 	// pause between devices once the canary proved the image
 	rolloutStagger = 15 * time.Second
+
+	// downloadFirmware is swapped out in tests; production always fetches
+	// over HTTPS from the release URL validated in StartRollout.
+	downloadFirmware = download
 )
 
 type RolloutDevice struct {
@@ -114,8 +119,13 @@ type FirmwareRelease struct {
 // Releases lists ESP-Miner firmware releases from GitHub. Public repo, no
 // token needed; failures are surfaced rather than cached away.
 func Releases(ctx context.Context, repo string) ([]FirmwareRelease, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://api.github.com/repos/"+repo+"/releases?per_page=10", nil)
+	return releasesFrom(ctx, "https://api.github.com/repos/"+repo+"/releases?per_page=10")
+}
+
+// releasesFrom does the fetching and classification; split out so tests can
+// point it at a local server instead of GitHub.
+func releasesFrom(ctx context.Context, apiURL string) ([]FirmwareRelease, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +244,7 @@ func (m *Manager) runRollout(ctx context.Context, url string, www bool) {
 		m.rollout.set(func(s *RolloutStatus) { s.Running = false; s.Done = true })
 	}()
 
-	image, err := download(ctx, url)
+	image, err := downloadFirmware(ctx, url)
 	if err != nil {
 		m.rollout.set(func(s *RolloutStatus) { s.Message = "download failed: " + err.Error() })
 		m.feed.Add(alerts.Critical, "firmware_failed", "", "Firmware download failed: "+err.Error())
@@ -290,6 +300,20 @@ func (m *Manager) runRollout(ctx context.Context, url string, www bool) {
 			case <-time.After(rolloutStagger):
 			}
 		}
+	}
+	// A cancelled run must never report success: the skipped devices still
+	// run the old firmware and the operator has to see that.
+	if ctx.Err() != nil {
+		skipped := 0
+		for _, d := range m.rollout.snapshot().Devices {
+			if d.State == "skipped" {
+				skipped++
+			}
+		}
+		msg := fmt.Sprintf("Rollout cancelled — %d device(s) still on the old firmware", skipped)
+		m.rollout.set(func(s *RolloutStatus) { s.Message = msg })
+		m.feed.Add(alerts.Warning, "firmware_cancelled", "", msg)
+		return
 	}
 	m.rollout.set(func(s *RolloutStatus) { s.OK = true; s.Message = "rollout complete" })
 	m.feed.Add(alerts.Info, "firmware_done", "", "Firmware rollout finished successfully")
