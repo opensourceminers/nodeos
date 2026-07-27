@@ -744,16 +744,15 @@ details[open] summary::before { content: "▾ "; }
 /* ---------- footer ---------- */
 
 .site-footer {
-  display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap;
+  display: flex; align-items: center; justify-content: center;
+  gap: var(--s5); flex-wrap: wrap;
   margin-top: var(--s8);
   padding-top: var(--s4);
   border-top: 1px solid var(--grid);
-  font-size: 12px; color: var(--muted);
+  font-size: 12px;
 }
-.site-footer .brandline { display: inline-flex; align-items: center; gap: var(--s2); }
-.site-footer a { color: var(--ink-2); }
+.site-footer a { color: var(--muted); }
 .site-footer a:hover { color: var(--series-1); text-decoration: none; }
-.footer-links { display: flex; flex-direction: row; gap: var(--s4); padding: 0; margin-left: auto; flex-wrap: wrap; overflow: visible; }
 
 /* ---------- responsive ---------- */
 
