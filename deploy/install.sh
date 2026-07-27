@@ -620,8 +620,8 @@ esac
 HELPER
 chmod 0755 /usr/local/bin/nodeos-admin
 
-mkdir -p /var/lib/nodeos/admin /var/lib/nodeos/staged
-chown nodeos:nodeos /var/lib/nodeos/admin /var/lib/nodeos/staged
+mkdir -p /var/lib/nodeos/admin /var/lib/nodeos/staged /var/lib/nodeos/services-staging
+chown nodeos:nodeos /var/lib/nodeos/admin /var/lib/nodeos/staged /var/lib/nodeos/services-staging
 touch /var/lib/nodeos/admin/.helper-ready
 
 cat > /etc/systemd/system/nodeos-admin.service <<'EOF'
