@@ -236,6 +236,7 @@ async function loadAll() {
   refreshNodeSetup();
   loadNodeConfig();
   loadServices();
+  try { tuningPresets = await api("GET", "/api/tuning"); } catch {}
   loadPeers(); // the dashboard map greets the user alive, not empty
   connectSSE();
 }
@@ -620,6 +621,7 @@ function destination(i) {
 }
 
 let minerView = localStorage.getItem("nodeos-miner-view") || "cards";
+let tuningPresets = {};
 
 function tempClass(t) { return t >= 68 ? "hot" : t >= 60 ? "warn" : ""; }
 
@@ -664,12 +666,25 @@ function renderMiners() {
         <span>→</span><span class="val">${esc(dest.text)}</span>
       </div>
       ${m.last_error && !m.online ? `<div class="dest-line" style="color:var(--critical)"><span class="val">${esc(m.last_error)}</span></div>` : ""}
+      ${tuningRow(i)}
       <div class="actions">
         <button class="btn small" data-act="restart">Restart</button>
         <button class="btn small danger" data-act="remove">Remove</button>
       </div>
     </div>`;
   }).join("");
+}
+
+// tuning presets are per ASIC family; unknown models simply get no row
+function tuningRow(info) {
+  const list = tuningPresets[(info.ASICModel || "").toUpperCase()];
+  if (!list || !info.frequency) return "";
+  const active = list.find((p) => Math.abs(p.frequency - info.frequency) < 1);
+  return `<div class="tune-row">
+    <span class="k">Tuning</span>
+    ${list.map((p) => `<button class="tune-btn${active && active.id === p.id ? " active" : ""}"
+      data-act="tune" data-preset="${p.id}" title="${esc(p.name)} — ${p.frequency} MHz, ${p.core_voltage} mV${p.note ? " · " + esc(p.note) : ""}">${esc(p.name)}</button>`).join("")}
+  </div>`;
 }
 
 function minerTable(miners) {
@@ -715,6 +730,14 @@ $("miner-grid").addEventListener("click", async (e) => {
   const host = row && row.dataset.host;
   if (!host) return;
   try {
+    if (btn.dataset.act === "tune") {
+      const preset = btn.dataset.preset;
+      if (!confirm(`Apply the "${preset}" preset? The miner restarts and hashrate changes.`)) return;
+      btn.disabled = true;
+      await api("POST", `/api/miners/${encodeURIComponent(host)}/tune`, { preset });
+      toast(`${preset} applied — miner restarting`, "ok");
+      return;
+    }
     if (btn.dataset.act === "restart") {
       btn.disabled = true;
       await api("POST", `/api/miners/${encodeURIComponent(host)}/restart`);
@@ -731,6 +754,119 @@ $("miner-grid").addEventListener("click", async (e) => {
     btn.disabled = false;
   }
 });
+
+// ---------- firmware ----------
+
+let fwData = null;
+
+async function loadFirmware() {
+  const btn = $("fw-load");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    fwData = await api("GET", "/api/firmware");
+    renderFirmware();
+  } catch (err) {
+    $("fw-body").innerHTML = `<div class="note fail">${esc(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Check for firmware";
+  }
+}
+
+function renderFirmware() {
+  if (!fwData) return;
+  const miners = (snapshot && snapshot.miners) || [];
+  const versions = {};
+  for (const m of miners) {
+    if (m.online && m.info && m.info.version) versions[m.info.version] = (versions[m.info.version] || 0) + 1;
+  }
+  $("fw-versions").textContent = Object.entries(versions)
+    .map(([v, n]) => `${v} ×${n}`).join(" · ") || "no devices";
+
+  if (fwData.error) {
+    $("fw-body").innerHTML = `<div class="note fail">${esc(fwData.error)}</div>`;
+  } else {
+    const rels = (fwData.releases || []).slice(0, 5);
+    $("fw-body").innerHTML = rels.length ? `
+      <div class="table-wrap"><table class="plain">
+        <thead><tr><th>Release</th><th>File</th><th class="num">Size</th><th></th></tr></thead>
+        <tbody>${rels.flatMap((r) => r.assets
+          .filter((a) => a.kind !== "factory")
+          .map((a) => `<tr>
+            <td>${esc(r.tag)}</td>
+            <td>${esc(a.name)}${a.kind === "www" ? ` <span style="color:var(--muted)">web UI</span>` : ""}</td>
+            <td class="num">${fmtBytes(a.size)}</td>
+            <td class="num"><button class="btn small" data-fw="${esc(a.url)}" data-www="${a.kind === "www"}">Roll out</button></td>
+          </tr>`)).join("")}</tbody>
+      </table></div>
+      <div class="note">Factory images are hidden — they cannot be flashed over the air.
+        A rollout always starts with one canary device and only continues once it is
+        back and hashing.</div>` :
+      `<div class="note">No releases found.</div>`;
+  }
+  renderRollout(fwData.rollout);
+}
+
+function renderRollout(ro) {
+  const box = $("fw-rollout");
+  if (!ro || (!ro.running && !ro.devices?.length)) { box.hidden = true; return; }
+  box.hidden = false;
+  $("fw-roll-title").textContent = ro.running
+    ? `Rolling out ${ro.firmware}`
+    : `Rollout ${ro.ok ? "complete" : "stopped"} — ${ro.firmware}`;
+  $("fw-cancel").hidden = !ro.running;
+  $("fw-roll-msg").innerHTML = `${esc(ro.message || "")}${
+    ro.sha256 ? ` <span style="color:var(--muted)">· sha256 ${esc(ro.sha256.slice(0, 16))}…</span>` : ""}`;
+  const chip = (st) => ({
+    ok: `<span class="status-chip online"><span class="dot"></span>done</span>`,
+    failed: `<span class="status-chip offline"><span class="dot"></span>failed</span>`,
+    flashing: `<span class="status-chip warn"><span class="dot"></span>flashing</span>`,
+    verifying: `<span class="status-chip warn"><span class="dot"></span>verifying</span>`,
+    skipped: `<span class="badge">skipped</span>`,
+  }[st] || `<span class="badge">pending</span>`);
+  $("fw-roll-list").innerHTML = `<div class="table-wrap"><table class="plain">
+    <tbody>${ro.devices.map((d, i) => `<tr>
+      <td>${esc(d.label)}${d.host === ro.canary ? ` <span class="badge accent">canary</span>` : ""}</td>
+      <td>${chip(d.state)}</td>
+      <td style="color:var(--muted)">${esc(d.detail || "")}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+$("fw-load").addEventListener("click", loadFirmware);
+
+$("fw-body").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button[data-fw]");
+  if (!btn) return;
+  const online = ((snapshot && snapshot.miners) || []).filter((m) => m.online);
+  if (!online.length) { toast("No online miners", "err"); return; }
+  if (!confirm(`Flash ${online.length} miner(s)?\n\n` +
+      `NodeOS flashes ONE device first and only continues once it is back and hashing. ` +
+      `Do not power off any miner during the rollout.`)) return;
+  try {
+    await api("POST", "/api/firmware/rollout", {
+      url: btn.dataset.fw, www: btn.dataset.www === "true",
+      hosts: online.map((m) => m.host),
+    });
+    toast("Rollout started — canary first", "ok");
+    loadFirmware();
+  } catch (err) { toast(err.message, "err"); }
+});
+
+$("fw-cancel").addEventListener("click", async () => {
+  try {
+    await api("POST", "/api/firmware/cancel");
+    toast("Rollout will stop after the current device", "ok");
+  } catch (err) { toast(err.message, "err"); }
+});
+
+// keep a running rollout live
+setInterval(() => {
+  if (document.querySelector("#tab-miners.active") && $("auth-overlay").hidden &&
+      !document.hidden && fwData && fwData.rollout && fwData.rollout.running) {
+    loadFirmware();
+  }
+}, 5000);
 
 // ---------- node ----------
 

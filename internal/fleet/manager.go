@@ -101,6 +101,9 @@ type Manager struct {
 	// networkDifficulty is fed from the node client for block-candidate checks.
 	diffMu            sync.Mutex
 	networkDifficulty float64
+
+	// rollout tracks the staged firmware update (one at a time, fleet-wide).
+	rollout rollout
 }
 
 func NewManager(cfg config.Config, st *store.Store, feed *alerts.Feed) *Manager {

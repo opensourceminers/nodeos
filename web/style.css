@@ -533,6 +533,23 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
 .dest-line.own { color: var(--accent); }
 .dest-line.fallback { color: var(--warning); }
 
+.tune-row {
+  display: flex; align-items: center; gap: var(--s2);
+  margin-top: var(--s3); padding-top: var(--s3);
+  border-top: 1px solid var(--grid);
+  font-size: 11px;
+}
+.tune-row .k { color: var(--muted); margin-right: auto; }
+.tune-btn {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-full); color: var(--ink-2);
+  font: inherit; font-size: 11px; font-weight: 600;
+  padding: 2px 9px; cursor: pointer;
+  transition: color var(--fast), border-color var(--fast);
+}
+.tune-btn:hover { color: var(--ink); border-color: var(--muted); }
+.tune-btn.active { color: var(--series-1); border-color: var(--series-1); }
+
 .miner-card .actions {
   margin-top: var(--s3); display: flex; gap: var(--s2);
   opacity: 0; transition: opacity var(--fast);

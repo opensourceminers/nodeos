@@ -192,6 +192,32 @@ func (c *Client) PatchSystem(ctx context.Context, host string, fields map[string
 	return nil
 }
 
+// OTA uploads a firmware image. path is "/api/system/OTA" for the miner
+// firmware and "/api/system/OTAWWW" for the web interface; the device
+// reboots itself when the flash completes.
+//
+// This is the one call in NodeOS that can brick hardware, so it is wrapped
+// in a long timeout and never retried automatically.
+func (c *Client) OTA(ctx context.Context, host, path string, image []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(host, path), bytes.NewReader(image))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = int64(len(image))
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("%s: HTTP %d: %s", host, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 func (c *Client) Restart(ctx context.Context, host string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(host, "/api/system/restart"), nil)
 	if err != nil {

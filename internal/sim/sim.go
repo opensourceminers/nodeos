@@ -44,6 +44,8 @@ type simMiner struct {
 	bestSess float64
 	freq     float64
 	coreV    float64
+	flashing bool
+	version  string
 	stratum  struct {
 		URL, User         string
 		Port              int
@@ -66,6 +68,7 @@ func StartFleet(n int) ([]string, error) {
 			temp:    52 + float64(i%5)*2,
 			freq:    490,
 			coreV:   1150,
+			version: "v2.14.1-sim",
 		}
 		s.stratum.URL = "public-pool.io"
 		s.stratum.Port = 21496
@@ -80,6 +83,8 @@ func StartFleet(n int) ([]string, error) {
 		mux.HandleFunc("GET /api/system/info", s.handleInfo)
 		mux.HandleFunc("PATCH /api/system", s.handlePatch)
 		mux.HandleFunc("POST /api/system/restart", s.handleRestart)
+		mux.HandleFunc("POST /api/system/OTA", s.handleOTA)
+		mux.HandleFunc("POST /api/system/OTAWWW", s.handleOTA)
 		srv := &http.Server{Handler: mux}
 		go srv.Serve(ln)
 		go s.tick()
@@ -143,6 +148,11 @@ func fmtDiff(d float64) string {
 func (s *simMiner) handleInfo(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.flashing {
+		// a flashing device is simply unreachable
+		http.Error(w, "flashing", http.StatusServiceUnavailable)
+		return
+	}
 	_, portStr, _ := net.SplitHostPort(s.host)
 	info := map[string]any{
 		"power":              s.model.watts * (0.95 + 0.1*s.rng.Float64()),
@@ -177,7 +187,7 @@ func (s *simMiner) handleInfo(w http.ResponseWriter, r *http.Request) {
 		"fanrpm":             3000 + (s.temp-50)*120,
 		"autofanspeed":       1,
 		"overheat_mode":      0,
-		"version":            "v2.14.1-sim",
+		"version":            s.version,
 		"boardVersion":       "204",
 		"runningPartition":   "ota_0",
 		"freeHeap":           190000,
@@ -220,6 +230,29 @@ func (s *simMiner) handlePatch(w http.ResponseWriter, r *http.Request) {
 		s.coreV = v
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleOTA emulates a firmware flash: accept the image, go dark for a few
+// seconds, come back with a bumped version. Lets the staged rollout —
+// including the canary verification — be tested without risking hardware.
+func (s *simMiner) handleOTA(w http.ResponseWriter, r *http.Request) {
+	n, _ := io.Copy(io.Discard, io.LimitReader(r.Body, 64<<20))
+	if n < 1024 {
+		http.Error(w, "image too small", http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	go func() {
+		s.mu.Lock()
+		s.flashing = true
+		s.mu.Unlock()
+		time.Sleep(12 * time.Second) // reboot window
+		s.mu.Lock()
+		s.flashing = false
+		s.started = time.Now()
+		s.version = "v2.15.0-sim"
+		s.mu.Unlock()
+	}()
 }
 
 func (s *simMiner) handleRestart(w http.ResponseWriter, r *http.Request) {

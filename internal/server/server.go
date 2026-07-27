@@ -690,6 +690,59 @@ func (s *Server) Handler() http.Handler {
 		}
 	})
 
+	// ---- firmware & tuning ----
+
+	mux.HandleFunc("GET /api/firmware", func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]any{"rollout": s.fleet.RolloutStatus(), "repo": firmwareRepo}
+		rels, err := fleet.Releases(r.Context(), firmwareRepo)
+		if err != nil {
+			resp["error"] = err.Error()
+		} else {
+			resp["releases"] = rels
+		}
+		writeJSON(w, resp)
+	})
+
+	mux.HandleFunc("POST /api/firmware/rollout", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			URL   string   `json:"url"`
+			Hosts []string `json:"hosts"`
+			WWW   bool     `json:"www"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if err := s.fleet.StartRollout(req.URL, firmwareRepo, req.Hosts, req.WWW); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		writeJSON(w, s.fleet.RolloutStatus())
+	})
+
+	mux.HandleFunc("POST /api/firmware/cancel", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]bool{"cancelled": s.fleet.CancelRollout()})
+	})
+
+	mux.HandleFunc("GET /api/tuning", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, fleet.AllPresets())
+	})
+
+	mux.HandleFunc("POST /api/miners/{host}/tune", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Preset string `json:"preset"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if err := s.fleet.ApplyPreset(r.Context(), r.PathValue("host"), req.Preset); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+
 	mux.HandleFunc("GET /api/system/history", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, s.health.History(480))
 	})
@@ -710,6 +763,9 @@ var (
 	aliasRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
 	rgbRe   = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
 )
+
+// firmwareRepo is the only source NodeOS accepts firmware from.
+const firmwareRepo = "bitaxeorg/ESP-Miner"
 
 // serviceParams builds the @@KEY@@ substitutions for a service's unit
 // templates from stored user settings.

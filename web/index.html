@@ -173,6 +173,24 @@
   </div>
 
   <div class="panel" style="margin-top:16px">
+    <div class="panel-head">
+      <h2>Firmware</h2>
+      <span class="badge" id="fw-versions"></span>
+      <button class="btn small" id="fw-load" style="margin-left:auto">Check for firmware</button>
+    </div>
+    <div id="fw-body"><div class="note">Releases are fetched from the official ESP-Miner
+      repository on demand.</div></div>
+    <div id="fw-rollout" hidden>
+      <div class="panel-head" style="margin-top:14px">
+        <h2 id="fw-roll-title">Rollout</h2>
+        <button class="btn small danger" id="fw-cancel" style="margin-left:auto">Cancel</button>
+      </div>
+      <div class="note" id="fw-roll-msg"></div>
+      <div id="fw-roll-list"></div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
     <h2>Work engine — solo mining against this node</h2>
     <div class="work-state" id="w-state"><span class="status-chip offline"><span class="dot"></span>off</span></div>
     <div class="note" id="w-detail"></div>
