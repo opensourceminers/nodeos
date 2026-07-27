@@ -23,6 +23,7 @@ import (
 type Requires struct {
 	FullNode bool `json:"full_node,omitempty"` // pruned node won't do
 	TxIndex  bool `json:"tx_index,omitempty"`
+	Synced   bool `json:"synced,omitempty"` // useless until the node is at the tip
 	Disk     int  `json:"disk_gb,omitempty"` // rough extra disk need
 }
 
@@ -130,7 +131,7 @@ WantedBy=multi-user.target
 			Tagline: "the mempool.space UI on your own node",
 			Description: "Block and fee explorer served entirely from your node — three containers " +
 				"(database, API, web) supervised as one service.",
-			Requires: Requires{Disk: 5},
+			Requires: Requires{Synced: true, Disk: 5},
 			Port:     3006,
 			WebPath:  "/",
 			units: map[string]string{
@@ -181,8 +182,10 @@ Environment=MEMPOOL_HTTP_PORT=8999
 Environment=MEMPOOL_CACHE_DIR=/backend/cache
 
 [Service]
-Restart=on-failure
-RestartSec=15
+# exits cleanly while bitcoind is still syncing — keep retrying until the
+# node reaches the tip, then it simply stays up
+Restart=always
+RestartSec=30
 
 [Install]
 WantedBy=multi-user.target

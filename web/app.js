@@ -1059,6 +1059,9 @@ function renderServices() {
     if (c.requires.full_node && svcData.pruned) {
       warns.push(`needs a full node — yours is pruned`);
     }
+    if (c.requires.synced && snapshot && snapshot.solo && snapshot.solo.syncing) {
+      warns.push(`starts once the node is synced (${(snapshot.node.progress * 100).toFixed(1)} %)`);
+    }
     if (c.requires.disk_gb) warns.push(`~${c.requires.disk_gb} GB disk`);
 
     let actions = "";
@@ -1096,9 +1099,12 @@ function renderServices() {
 }
 
 function renderSvcJob(job) {
+  // an explicitly opened log view owns the panel; job output never steals it
+  if (svcLogsFor) return;
   const panel = $("svc-job-panel");
   if (!job || !job.log || !job.log.length) { panel.hidden = true; return; }
   panel.hidden = false;
+  $("svc-job-title").textContent = "Service job";
   const chip = $("svc-job-state");
   chip.className = "status-chip " + (job.running ? "warn" : job.ok ? "online" : "offline");
   chip.innerHTML = `<span class="dot"></span>${job.running ? esc(job.name) + " running" : job.ok ? "done" : "failed"}`;
@@ -1106,17 +1112,39 @@ function renderSvcJob(job) {
   $("svc-job-log").scrollTop = $("svc-job-log").scrollHeight;
 }
 
+async function refreshSvcLogs() {
+  if (!svcLogsFor) return;
+  try {
+    const d = await api("GET", `/api/services/${svcLogsFor}/logs`);
+    if (!svcLogsFor) return; // closed while fetching
+    const panel = $("svc-job-panel");
+    const atBottom = $("svc-job-log").scrollHeight - $("svc-job-log").scrollTop
+      - $("svc-job-log").clientHeight < 40;
+    panel.hidden = false;
+    $("svc-job-title").textContent = `Logs — ${svcLogsFor}`;
+    $("svc-job-state").className = "status-chip online";
+    $("svc-job-state").innerHTML = `<span class="dot"></span>live · refreshes every 5 s`;
+    $("svc-job-log").textContent = d.logs || "(empty)";
+    if (atBottom) $("svc-job-log").scrollTop = $("svc-job-log").scrollHeight;
+  } catch (err) {
+    $("svc-job-log").textContent = err.message;
+  }
+}
+
+$("svc-job-close").addEventListener("click", () => {
+  svcLogsFor = null;
+  $("svc-job-panel").hidden = true;
+});
+
 $("svc-grid").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-svc]");
   if (!btn) return;
   const id = btn.dataset.svc, act = btn.dataset.act;
   try {
     if (act === "logs") {
-      const d = await api("GET", `/api/services/${id}/logs`);
-      $("svc-job-panel").hidden = false;
-      $("svc-job-state").className = "status-chip online";
-      $("svc-job-state").innerHTML = `<span class="dot"></span>${esc(id)} logs`;
-      $("svc-job-log").textContent = d.logs || "(empty)";
+      svcLogsFor = id;
+      await refreshSvcLogs();
+      $("svc-job-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
       return;
     }
     if (act === "remove" && !confirm(`Remove ${id}? Its data under /var/lib/nodeos-services stays on disk.`)) return;
@@ -1130,10 +1158,11 @@ $("svc-grid").addEventListener("click", async (e) => {
   }
 });
 
-// keep the services page fresh while a job runs
+// keep the services page fresh while a job runs; opened logs refresh live
 setInterval(() => {
   if (document.querySelector("#tab-services.active") && $("auth-overlay").hidden && !document.hidden) {
     loadServices();
+    refreshSvcLogs();
   }
 }, 5000);
 
