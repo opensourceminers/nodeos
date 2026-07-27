@@ -82,7 +82,7 @@ Network=host
 Volume=` + dataRoot + `/lightning:/root/.lightning
 # bitcoin-retry-timeout: a node busy with IBD can take minutes to answer
 # getblock; the 60 s default makes lightningd declare itself broken and die
-Exec=--network=bitcoin --bitcoin-rpcconnect=127.0.0.1 --bitcoin-rpcport=8332 --bitcoin-rpcuser=nodeossvc --bitcoin-rpcpassword=@@RPCPASS@@ --bitcoin-retry-timeout=3600 --bind-addr=0.0.0.0:9735 --clnrest-host=127.0.0.1 --clnrest-port=3010 --clnrest-protocol=http --log-level=info
+Exec=--network=bitcoin --bitcoin-rpcconnect=127.0.0.1 --bitcoin-rpcport=8332 --bitcoin-rpcuser=nodeossvc --bitcoin-rpcpassword=@@RPCPASS@@ --bitcoin-retry-timeout=3600 @@EXTRA_ARGS@@--bind-addr=0.0.0.0:9735 --clnrest-host=127.0.0.1 --clnrest-port=3010 --clnrest-protocol=http --log-level=info
 
 [Service]
 Restart=on-failure
@@ -321,8 +321,10 @@ func ByID(id string) *Service {
 // ---------- staging ----------
 
 // Stage writes the service's unit files into <dataDir>/services-staging/<id>/
-// for the root helper to validate and install.
-func Stage(dataDir string, s *Service) error {
+// for the root helper to validate and install. params are service-specific
+// "@@KEY@@" substitutions (the helper only handles @@RPCPASS@@ itself);
+// unresolved placeholders are cleared.
+func Stage(dataDir string, s *Service, params map[string]string) error {
 	if s.Planned {
 		return fmt.Errorf("%s is not installable yet", s.Name)
 	}
@@ -334,11 +336,37 @@ func Stage(dataDir string, s *Service) error {
 		return err
 	}
 	for name, content := range s.units {
+		for k, v := range params {
+			content = strings.ReplaceAll(content, "@@"+k+"@@", v)
+		}
+		content = clearUnknownPlaceholders(content)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// clearUnknownPlaceholders removes leftover @@X@@ tokens — except RPCPASS,
+// which the root helper substitutes on its side.
+func clearUnknownPlaceholders(content string) string {
+	for {
+		i := strings.Index(content, "@@")
+		if i < 0 {
+			return content
+		}
+		j := strings.Index(content[i+2:], "@@")
+		if j < 0 {
+			return content
+		}
+		token := content[i : i+2+j+2]
+		if token == "@@RPCPASS@@" {
+			// skip past it and keep scanning
+			rest := clearUnknownPlaceholders(content[i+len(token):])
+			return content[:i+len(token)] + rest
+		}
+		content = content[:i] + content[i+2+j+2:]
+	}
 }
 
 // ---------- status ----------

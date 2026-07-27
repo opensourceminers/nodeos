@@ -247,6 +247,13 @@ main { padding: var(--s6); padding-bottom: var(--s8); max-width: 1240px; width: 
   font-size: 12px; font-weight: 600;
   max-width: 100%;
 }
+/* the dashboard hero's destination is the product's core statement — big */
+#hero .route { font-size: 16px; padding: var(--s3) var(--s5); gap: var(--s3); }
+#hero .route .pulse { width: 10px; height: 10px; flex-basis: 10px; }
+
+.chart-legend { display: flex; gap: var(--s4); font-size: 12px; color: var(--ink-2); }
+.chart-legend .lk { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.chart-legend .lk i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
 .route .dest { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route.own { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-dim); }
 .route.own .dest { color: var(--accent); }

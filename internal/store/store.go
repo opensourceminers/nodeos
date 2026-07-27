@@ -45,6 +45,14 @@ type State struct {
 	// switched to the work engine, so "switch back" can restore it.
 	ExternalPool *config.Pool `json:"external_pool,omitempty"`
 	Auth         *AuthState   `json:"auth,omitempty"`
+	// LN holds user-facing Core Lightning options rendered into the service
+	// unit (applied via reinstall + restart).
+	LN *LightningSettings `json:"lightning,omitempty"`
+}
+
+type LightningSettings struct {
+	Alias string `json:"alias"`
+	RGB   string `json:"rgb"` // 6 hex digits, node color
 }
 
 type Store struct {

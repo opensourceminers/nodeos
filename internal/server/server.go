@@ -207,7 +207,7 @@ func (s *Server) Handler() http.Handler {
 			httpErr(w, 404, fmt.Errorf("unknown or not yet installable service"))
 			return
 		}
-		if err := services.Stage(s.cfg.DataDir, svc); err != nil {
+		if err := services.Stage(s.cfg.DataDir, svc, s.serviceParams(svc.ID)); err != nil {
 			httpErr(w, 500, err)
 			return
 		}
@@ -271,6 +271,51 @@ func (s *Server) Handler() http.Handler {
 			httpErr(w, 409, err)
 			return
 		}
+		writeJSON(w, job)
+	})
+
+	mux.HandleFunc("GET /api/lightning/settings", func(w http.ResponseWriter, r *http.Request) {
+		ln := s.store.Get().LN
+		if ln == nil {
+			ln = &store.LightningSettings{}
+		}
+		writeJSON(w, ln)
+	})
+
+	// PUT re-stages the unit with the new options and restarts CLN via the
+	// helper — a short Lightning downtime, surfaced as a job.
+	mux.HandleFunc("PUT /api/lightning/settings", func(w http.ResponseWriter, r *http.Request) {
+		var req store.LightningSettings
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		req.Alias = strings.TrimSpace(req.Alias)
+		req.RGB = strings.TrimPrefix(strings.TrimSpace(req.RGB), "#")
+		if req.Alias != "" && !aliasRe.MatchString(req.Alias) {
+			httpErr(w, 400, fmt.Errorf("alias: 1–32 characters, letters/digits/._- only"))
+			return
+		}
+		if req.RGB != "" && !rgbRe.MatchString(req.RGB) {
+			httpErr(w, 400, fmt.Errorf("color must be 6 hex digits"))
+			return
+		}
+		if err := s.store.Update(func(st *store.State) { st.LN = &req }); err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		svc := services.ByID("lightning")
+		if err := services.Stage(s.cfg.DataDir, svc, s.serviceParams("lightning")); err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		job, err := s.admin.Start("service-install", "lightning")
+		if err != nil {
+			httpErr(w, 409, err)
+			return
+		}
+		s.feed.Add(alerts.Info, "lightning_settings", "",
+			"Lightning options updated — Core Lightning is restarting")
 		writeJSON(w, job)
 	})
 
@@ -645,6 +690,10 @@ func (s *Server) Handler() http.Handler {
 		}
 	})
 
+	mux.HandleFunc("GET /api/system/history", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, s.health.History(480))
+	})
+
 	mux.HandleFunc("GET /api/events", s.handleSSE)
 
 	// Embedded UI. Serve index.html for "/" and let the FS handle assets.
@@ -655,6 +704,31 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /", http.FileServerFS(sub))
 
 	return s.withAuth(mux)
+}
+
+var (
+	aliasRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
+	rgbRe   = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
+)
+
+// serviceParams builds the @@KEY@@ substitutions for a service's unit
+// templates from stored user settings.
+func (s *Server) serviceParams(id string) map[string]string {
+	if id != "lightning" {
+		return nil
+	}
+	ln := s.store.Get().LN
+	if ln == nil {
+		return nil
+	}
+	extra := ""
+	if ln.Alias != "" && aliasRe.MatchString(ln.Alias) {
+		extra += "--alias=" + ln.Alias + " "
+	}
+	if ln.RGB != "" && rgbRe.MatchString(ln.RGB) {
+		extra += "--rgb=" + strings.ToLower(ln.RGB) + " "
+	}
+	return map[string]string{"EXTRA_ARGS": extra}
 }
 
 // ---- status payload ----
@@ -698,6 +772,7 @@ func (s *Server) statusPayload(histSamples int) map[string]any {
 		"solo":      solo,
 		"work":      s.engine.Status(),
 		"system":    s.health.Last(),
+		"lightning": s.lightning.Quick(context.Background()),
 		"services":  s.services.StatusAll(),
 		"miners":    s.fleet.Miners(histSamples),
 		"scan":      s.fleet.ScanStatus(),

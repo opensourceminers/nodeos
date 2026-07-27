@@ -179,6 +179,7 @@ $("nav").addEventListener("click", (e) => {
   $("page-title").textContent = btn.querySelector(".lbl").textContent;
   $("sidebar").classList.remove("open"); // close the drawer on mobile
   if (btn.dataset.tab === "lightning") loadLightning();
+  if (btn.dataset.tab === "system") loadSysHistory();
   if (snapshot) render();
 });
 
@@ -257,6 +258,7 @@ function render() {
   renderHeader();
   renderHero();
   renderTiles();
+  renderDashNode();
   renderFleetChart();
   renderSolo();
   renderMiners();
@@ -338,16 +340,21 @@ function tileHTML(t) {
 }
 
 function renderTiles() {
-  const { fleet, solo } = snapshot;
+  const { fleet, solo, system } = snapshot;
+  const ln = snapshot.lightning || {};
+  const svcs = snapshot.services || [];
+  const svcRunning = svcs.filter((x) => x.running).length;
+  const svcInstalled = svcs.filter((x) => x.installed).length;
   const oddsDay = solo.odds_per_day;
+  const memPct = system && system.mem_total_b
+    ? 100 * (system.mem_total_b - system.mem_avail_b) / system.mem_total_b : 0;
+
   const tiles = [
     { i: ICO.miners, l: "Miners online", v: `${fleet.online} <small>/ ${fleet.count}</small>`,
       s: fleet.count && fleet.online < fleet.count ? `${fleet.count - fleet.online} offline` : "all reachable",
       c: fleet.count && fleet.online < fleet.count ? "warn" : "good" },
     { i: ICO.power, l: "Power draw", v: `${fleet.total_power_w.toFixed(0)} <small>W</small>`,
       s: fleet.total_power_w ? `${(fleet.total_power_w * 24 / 1000).toFixed(1)} kWh per day` : "" },
-    { i: ICO.eff, l: "Efficiency", v: fleet.efficiency_j_th ? `${fleet.efficiency_j_th.toFixed(1)} <small>J/TH</small>` : "–",
-      s: "measured, not spec sheet" },
     { i: ICO.best, l: "Best share", v: fleet.best_diff ? esc(fleet.best_diff_str) : "–",
       s: solo.network_difficulty && fleet.best_diff
         ? `${(fleet.best_diff / solo.network_difficulty * 100).toFixed(2)} % of a block` : "all-time best" },
@@ -356,8 +363,54 @@ function renderTiles() {
         : solo.syncing ? "waiting for full node sync" : "needs node + hashrate",
       c: solo.syncing ? "warn" : "" },
     workTile(snapshot.work),
+    { i: "⚡", l: "Lightning", v: ln.available ? esc(ln.alias || "ready") : ln.connected ? "starting" : "–",
+      s: ln.available ? (ln.syncing ? "waiting for chain sync" : "operational")
+        : "install via Services", c: ln.available && !ln.syncing ? "good" : ln.available ? "warn" : "" },
+    { i: "◆", l: "Services", v: `${svcRunning} <small>/ ${svcInstalled}</small>`,
+      s: svcInstalled ? "running / installed" : "none installed yet" },
+    { i: "◱", l: "System", v: system && system.cpu_pct != null ? `${system.cpu_pct.toFixed(0)} <small>% CPU</small>` : "–",
+      s: memPct ? `RAM ${memPct.toFixed(0)} % · load ${system.load1.toFixed(2)}` : "",
+      c: system && (system.cpu_pct > 92 || memPct > 92) ? "warn" : "" },
   ];
   $("tiles").innerHTML = tiles.map(tileHTML).join("");
+}
+
+// nodeTiles builds the four node stat tiles shared by the dashboard and the
+// node page.
+function nodeTiles(n) {
+  return [
+    { i: ICO.height, l: "Block height", v: n.blocks.toLocaleString(),
+      s: n.tip_time ? `tip ${ago(n.tip_time)}` : "" },
+    { i: ICO.peers, l: "Peers", v: String(n.connections),
+      s: `${n.peers_out || 0} out · ${n.connections_in} in`,
+      c: n.connections < 3 ? "warn" : "" },
+    { i: ICO.mempool, l: "Mempool", v: `${n.mempool_txs.toLocaleString()} <small>tx</small>`,
+      s: `${fmtBytes(n.mempool_bytes)}${n.mempool_max ? " of " + fmtBytes(n.mempool_max) : ""}` },
+    { i: ICO.disk, l: "Chain on disk", v: fmtBytes(n.size_on_disk),
+      s: n.pruned ? `pruned${n.prune_target_b ? " to " + fmtBytes(n.prune_target_b) : ""}` : "full node" },
+  ];
+}
+
+// the dashboard's compact Bitcoin-node overview (sync strip + tiles)
+function renderDashNode() {
+  const n = snapshot.node;
+  if (!n.available) {
+    $("dash-node-state").innerHTML = `<span class="status-chip offline"><span class="dot"></span>offline</span>`;
+    $("dash-node-sync").innerHTML = `<div class="empty" style="padding:12px">No Bitcoin node reachable — set one up on the node page.</div>`;
+    $("dash-node-tiles").innerHTML = "";
+    return;
+  }
+  const pct = n.progress * 100;
+  const syncing = n.ibd || n.progress < 0.9999;
+  const behind = Math.max(0, n.headers - n.blocks);
+  $("dash-node-state").innerHTML = syncing
+    ? `<span class="status-chip warn"><span class="dot"></span>synchronising ${pct.toFixed(2)} %</span>`
+    : `<span class="status-chip online"><span class="dot"></span>in sync</span>`;
+  $("dash-node-sync").innerHTML = syncing ? `
+    <div class="progress"><div style="width:${pct.toFixed(2)}%"></div></div>
+    <div class="note">block ${n.blocks.toLocaleString()} of ${n.headers.toLocaleString()} · ${behind.toLocaleString()} to go</div>`
+    : "";
+  $("dash-node-tiles").innerHTML = nodeTiles(n).map(tileHTML).join("");
 }
 
 function workTile(w) {
@@ -739,17 +792,7 @@ function renderNode() {
       ${n.warnings ? `<div class="hero-sub" style="color:var(--warning)">⚠ ${esc(n.warnings)}</div>` : ""}
     </div>`;
 
-  $("node-tiles").innerHTML = [
-    { i: ICO.height, l: "Block height", v: n.blocks.toLocaleString(),
-      s: n.tip_time ? `tip ${ago(n.tip_time)}` : "" },
-    { i: ICO.peers, l: "Peers", v: String(n.connections),
-      s: `${n.peers_out || 0} out · ${n.connections_in} in`,
-      c: n.connections < 3 ? "warn" : "" },
-    { i: ICO.mempool, l: "Mempool", v: `${n.mempool_txs.toLocaleString()} <small>tx</small>`,
-      s: `${fmtBytes(n.mempool_bytes)}${n.mempool_max ? " of " + fmtBytes(n.mempool_max) : ""}` },
-    { i: ICO.disk, l: "Chain on disk", v: fmtBytes(n.size_on_disk),
-      s: n.pruned ? `pruned${n.prune_target_b ? " to " + fmtBytes(n.prune_target_b) : ""}` : "full node" },
-  ].map(tileHTML).join("");
+  $("node-tiles").innerHTML = nodeTiles(n).map(tileHTML).join("");
 
   $("node-chain").innerHTML = `
     <dl class="kv">
@@ -1111,6 +1154,8 @@ async function loadLightning() {
     </div>`;
 
   $("ln-actions").hidden = false;
+  $("ln-settings-panel").hidden = false;
+  loadLnSettings();
   const chPanel = $("ln-channels-panel");
   const chs = ln.channels || [];
   chPanel.hidden = false;
@@ -1134,6 +1179,37 @@ async function loadLightning() {
       channel management lands in the next iteration; until then use the CLI:
       <code>podman exec nodeos-svc-lightning lightning-cli fundchannel …</code></div>`;
 }
+
+let lnSettingsLoaded = false;
+
+async function loadLnSettings() {
+  if (lnSettingsLoaded) return;
+  lnSettingsLoaded = true;
+  try {
+    const s = await api("GET", "/api/lightning/settings");
+    if (s.alias) $("ln-set-alias").value = s.alias;
+    if (s.rgb) $("ln-set-rgb").value = "#" + s.rgb;
+  } catch {}
+}
+
+$("ln-set-apply").addEventListener("click", async () => {
+  const alias = $("ln-set-alias").value.trim();
+  if (alias && !/^[A-Za-z0-9._-]{1,32}$/.test(alias)) {
+    $("ln-set-result").innerHTML = `<span class="fail">Alias: 1–32 characters, letters/digits/._- only (no spaces)</span>`;
+    return;
+  }
+  if (!confirm("Apply Lightning options? Core Lightning restarts (a few seconds).")) return;
+  try {
+    await api("PUT", "/api/lightning/settings", {
+      alias, rgb: $("ln-set-rgb").value.replace("#", ""),
+    });
+    $("ln-set-result").innerHTML = `<span class="ok">Applying — Lightning is restarting…</span>`;
+    toast("Lightning options applied", "ok");
+    setTimeout(loadLightning, 8000);
+  } catch (err) {
+    $("ln-set-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
 
 async function copyText(text, btn) {
   try {
@@ -1199,7 +1275,34 @@ function renderServices() {
   const installedCount = (svcData.status || []).filter((s) => s.installed).length;
   $("nav-svc-count").textContent = installedCount ? `(${installedCount})` : "";
 
-  $("svc-grid").innerHTML = (svcData.catalog || []).map((c) => {
+  // the Bitcoin node presented like any other app — it IS the first app
+  const n = snapshot ? snapshot.node : null;
+  let nodeCard = "";
+  if (n) {
+    const impl = n.subversion || "Bitcoin Core";
+    const pct = (n.progress * 100).toFixed(1);
+    const chip = !n.available
+      ? `<span class="status-chip offline"><span class="dot"></span>offline</span>`
+      : n.ibd || n.progress < 0.9999
+        ? `<span class="status-chip warn"><span class="dot"></span>syncing ${pct} %</span>`
+        : `<span class="status-chip online"><span class="dot"></span>running</span>`;
+    nodeCard = `
+    <div class="miner-card svc-card">
+      <div class="top">
+        <span class="svc-ico">⛓</span>
+        <span class="name">Bitcoin node</span>
+        ${chip}
+      </div>
+      <div class="note svc-desc">${esc(impl)} — the foundation every other service builds on.
+        ${n.available ? `${n.blocks.toLocaleString()} blocks · ${n.connections} peers${n.pruned ? " · pruned" : ""}` : ""}</div>
+      <div class="actions">
+        <button class="btn small primary" data-goto="node">Manage</button>
+        <button class="btn small" data-goto="lightning">Lightning</button>
+      </div>
+    </div>`;
+  }
+
+  $("svc-grid").innerHTML = nodeCard + (svcData.catalog || []).map((c) => {
     const st = stById[c.id] || {};
     let chip;
     if (c.planned) chip = `<span class="badge">planned</span>`;
@@ -1289,7 +1392,14 @@ $("svc-job-close").addEventListener("click", () => {
   $("svc-job-panel").hidden = true;
 });
 
+function gotoTab(tab) {
+  const btn = document.querySelector(`nav button[data-tab="${tab}"]`);
+  if (btn) btn.click();
+}
+
 $("svc-grid").addEventListener("click", async (e) => {
+  const nav = e.target.closest("button[data-goto]");
+  if (nav) { gotoTab(nav.dataset.goto); return; }
   const btn = e.target.closest("button[data-svc]");
   if (!btn) return;
   const id = btn.dataset.svc, act = btn.dataset.act;
@@ -1440,8 +1550,25 @@ function renderSystem() {
   const el = $("sys-body");
   if (!sys || !sys.checked_at || sys.cpu_count === 0) {
     el.innerHTML = `<div class="empty">System metrics unavailable (Linux only).</div>`;
+    $("sys-tiles").innerHTML = "";
     return;
   }
+  const memPct = sys.mem_total_b ? 100 * (sys.mem_total_b - sys.mem_avail_b) / sys.mem_total_b : 0;
+  const dataDisk = (sys.disks || []).reduce((a, d) => (!a || d.free_b < a.free_b ? d : a), null);
+  $("sys-tiles").innerHTML = [
+    { i: "◱", l: "CPU", v: sys.cpu_pct != null ? `${sys.cpu_pct.toFixed(0)} <small>%</small>` : "–",
+      s: `${sys.cpu_count} cores · load ${sys.load1.toFixed(2)}`,
+      c: sys.cpu_pct > 92 ? "warn" : "" },
+    { i: "▤", l: "Memory", v: `${memPct.toFixed(0)} <small>%</small>`,
+      s: `${fmtBytes(sys.mem_total_b - sys.mem_avail_b)} of ${fmtBytes(sys.mem_total_b)}`,
+      c: memPct > 92 ? "warn" : "" },
+    { i: "🌡", l: "CPU temp", v: sys.cpu_temp_c ? `${sys.cpu_temp_c.toFixed(0)} <small>°C</small>` : "–",
+      s: sys.cpu_temp_c >= 80 ? "check airflow" : "", c: sys.cpu_temp_c >= 80 ? "warn" : "" },
+    { i: "▣", l: "Disk free", v: dataDisk ? fmtBytes(dataDisk.free_b) : "–",
+      s: dataDisk ? `${dataDisk.mount} · ${dataDisk.used_pct.toFixed(0)} % used` : "",
+      c: dataDisk && dataDisk.used_pct >= 90 ? "warn" : "" },
+    { i: "◔", l: "Uptime", v: fmtUptime(sys.uptime_s), s: "" },
+  ].map(tileHTML).join("");
   const mem = sys.mem_total_b
     ? `${fmtBytes(sys.mem_total_b - sys.mem_avail_b)} / ${fmtBytes(sys.mem_total_b)}` : "–";
   const disks = (sys.disks || []).map((d) =>
@@ -1464,6 +1591,103 @@ function renderSystem() {
       ${smart || `<dt>SMART</dt><dd>no report yet (updates every 30 min)</dd>`}
     </dl>`;
 }
+
+// ---------- system performance chart ----------
+
+let sysChartPoints = []; // for the tooltip: [{t, cpu, mem, x}]
+
+async function loadSysHistory() {
+  try {
+    const hist = await api("GET", "/api/system/history");
+    drawPerfChart(hist || []);
+  } catch { /* chart is decoration; tiles still work */ }
+}
+
+function drawPerfChart(samples) {
+  const svg = $("sys-chart");
+  const wrap = $("sys-chart-wrap");
+  const W = Math.max(wrap.clientWidth, 320), H = 240;
+  const padL = 44, padR = 12, padT = 12, padB = 24;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  if (samples.length < 2) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle"
+      fill="${C.muted}" font-size="13">Collecting samples… (every 15 s)</text>`;
+    $("sys-legend").innerHTML = "";
+    sysChartPoints = [];
+    return;
+  }
+
+  const tMin = samples[0].t, tMax = samples[samples.length - 1].t;
+  const x = (t) => padL + ((t - tMin) / Math.max(tMax - tMin, 1)) * (W - padL - padR);
+  const y = (v) => padT + (1 - v / 100) * (H - padT - padB); // shared 0–100 % axis
+
+  let grid = "";
+  for (const v of [0, 25, 50, 75, 100]) {
+    grid += `<line x1="${padL}" y1="${y(v)}" x2="${W - padR}" y2="${y(v)}" stroke="${C.grid}" stroke-width="1"/>
+      <text x="${padL - 8}" y="${y(v) + 4}" text-anchor="end" fill="${C.muted}" font-size="11">${v}%</text>`;
+  }
+  let xlab = "";
+  for (let i = 0; i <= 2; i++) {
+    const t = tMin + ((tMax - tMin) / 2) * i;
+    const d = new Date(t * 1000);
+    const anchor = i === 0 ? "start" : i === 2 ? "end" : "middle";
+    xlab += `<text x="${x(t)}" y="${H - 6}" text-anchor="${anchor}" fill="${C.muted}" font-size="11">
+      ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}</text>`;
+  }
+
+  const cpuColor = C.series, memColor = "#d95926"; // categorical slots 1 + 2
+  const line = (key) => samples.map((s, i) =>
+    `${i ? "L" : "M"}${x(s.t).toFixed(1)},${y(Math.min(100, s[key])).toFixed(1)}`).join("");
+
+  sysChartPoints = samples.map((s) => ({ t: s.t, cpu: s.cpu, mem: s.mem, x: x(s.t) }));
+
+  svg.innerHTML = `
+    ${grid}${xlab}
+    <path d="${line("cpu")}" fill="none" stroke="${cpuColor}" stroke-width="2"
+      stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="${line("mem")}" fill="none" stroke="${memColor}" stroke-width="2"
+      stroke-linejoin="round" stroke-linecap="round"/>
+    <line id="sys-cross" x1="0" y1="${padT}" x2="0" y2="${H - padB}"
+      stroke="${C.muted}" stroke-width="1" stroke-dasharray="3,3" visibility="hidden"/>`;
+
+  const last = samples[samples.length - 1];
+  $("sys-legend").innerHTML = `
+    <span class="lk"><i style="background:${cpuColor}"></i>CPU ${last.cpu.toFixed(0)} %</span>
+    <span class="lk"><i style="background:${memColor}"></i>RAM ${last.mem.toFixed(0)} %</span>`;
+}
+
+$("sys-chart-wrap").addEventListener("mousemove", (e) => {
+  if (!sysChartPoints.length) return;
+  const svg = $("sys-chart");
+  const rect = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const mx = ((e.clientX - rect.left) / rect.width) * vb.width;
+  let best = sysChartPoints[0];
+  for (const p of sysChartPoints) if (Math.abs(p.x - mx) < Math.abs(best.x - mx)) best = p;
+  const cross = $("sys-cross");
+  if (!cross) return;
+  cross.setAttribute("x1", best.x); cross.setAttribute("x2", best.x);
+  cross.setAttribute("visibility", "visible");
+  const tip = $("sys-tooltip");
+  tip.innerHTML = `<b>CPU ${best.cpu.toFixed(0)} % · RAM ${best.mem.toFixed(0)} %</b><br>
+    <span class="t">${new Date(best.t * 1000).toLocaleTimeString()}</span>`;
+  tip.style.display = "block";
+  const px = (best.x / vb.width) * rect.width;
+  tip.style.left = Math.min(px + 12, rect.width - 170) + "px";
+  tip.style.top = "16px";
+});
+$("sys-chart-wrap").addEventListener("mouseleave", () => {
+  $("sys-tooltip").style.display = "none";
+  const c = $("sys-cross");
+  if (c) c.setAttribute("visibility", "hidden");
+});
+
+setInterval(() => {
+  if (document.querySelector("#tab-system.active") && $("auth-overlay").hidden && !document.hidden) {
+    loadSysHistory();
+  }
+}, 20000);
 
 // ---------- work engine ----------
 

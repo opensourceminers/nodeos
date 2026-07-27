@@ -199,6 +199,36 @@ func (c *Client) Status(ctx context.Context) Info {
 	return info
 }
 
+// Quick is the dashboard variant of Status: one getinfo with a tight
+// timeout, no funds/channel calls — cheap enough for the SSE tick.
+type QuickInfo struct {
+	Connected bool   `json:"connected"`
+	Available bool   `json:"available"`
+	Alias     string `json:"alias,omitempty"`
+	Syncing   bool   `json:"syncing,omitempty"`
+}
+
+func (c *Client) Quick(ctx context.Context) QuickInfo {
+	q := QuickInfo{Connected: c.Connected()}
+	if !q.Connected {
+		return q
+	}
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var gi struct {
+		Alias   string `json:"alias"`
+		WarnBTC string `json:"warning_bitcoind_sync"`
+		WarnLN  string `json:"warning_lightningd_sync"`
+	}
+	if err := c.call(cctx, "getinfo", nil, &gi); err != nil {
+		return q
+	}
+	q.Available = true
+	q.Alias = gi.Alias
+	q.Syncing = gi.WarnBTC != "" || gi.WarnLN != ""
+	return q
+}
+
 // NewAddress returns a fresh bech32 receive address from CLN's wallet.
 func (c *Client) NewAddress(ctx context.Context) (string, error) {
 	var out struct {

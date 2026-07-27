@@ -41,6 +41,7 @@ type Snapshot struct {
 	Load5     float64     `json:"load5"`
 	Load15    float64     `json:"load15"`
 	CPUCount  int         `json:"cpu_count"`
+	CPUPct    float64     `json:"cpu_pct"` // busy % over the last sample interval
 	MemTotalB uint64      `json:"mem_total_b"`
 	MemAvailB uint64      `json:"mem_avail_b"`
 	UptimeS   int64       `json:"uptime_s"`
@@ -49,6 +50,15 @@ type Snapshot struct {
 	Smart     []SmartDisk `json:"smart"`
 	SmartAge  int64       `json:"smart_age_s,omitempty"` // seconds since smart.json was generated
 	CheckedAt time.Time   `json:"checked_at"`
+}
+
+// HistSample is one point of the performance history ring (for the system
+// chart): CPU busy %, memory used %, 1-minute load.
+type HistSample struct {
+	T    int64   `json:"t"`
+	CPU  float64 `json:"cpu"`
+	Mem  float64 `json:"mem"`
+	Load float64 `json:"load"`
 }
 
 // Collect gathers a snapshot. root is "/" in production and a temp dir in
@@ -225,6 +235,8 @@ const (
 	tempClearC   = 75.0
 )
 
+const histLen = 480 // at 15 s sampling: 2 hours
+
 type Monitor struct {
 	dataDir string
 	feed    *alerts.Feed
@@ -232,10 +244,15 @@ type Monitor struct {
 	mu     sync.Mutex
 	last   Snapshot
 	active map[string]bool // alert condition currently firing
+
+	prevBusy, prevTotal uint64
+	hist                [histLen]HistSample
+	histIdx, histCount  int
 }
 
 func NewMonitor(dataDir string, feed *alerts.Feed) *Monitor {
 	m := &Monitor{dataDir: dataDir, feed: feed, active: map[string]bool{}}
+	m.prevBusy, m.prevTotal = cpuTimes("/")
 	m.last = Collect("/", dataDir)
 	return m
 }
@@ -246,8 +263,23 @@ func (m *Monitor) Last() Snapshot {
 	return m.last
 }
 
+// History returns up to n most recent samples, oldest first.
+func (m *Monitor) History(n int) []HistSample {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n > m.histCount {
+		n = m.histCount
+	}
+	out := make([]HistSample, 0, n)
+	start := (m.histIdx - n + histLen*2) % histLen
+	for i := 0; i < n; i++ {
+		out = append(out, m.hist[(start+i)%histLen])
+	}
+	return out
+}
+
 func (m *Monitor) Run(ctx context.Context) {
-	t := time.NewTicker(60 * time.Second)
+	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -255,12 +287,57 @@ func (m *Monitor) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s := Collect("/", m.dataDir)
+
+			// CPU busy % from /proc/stat deltas
+			busy, total := cpuTimes("/")
 			m.mu.Lock()
+			if total > m.prevTotal {
+				s.CPUPct = 100 * float64(busy-m.prevBusy) / float64(total-m.prevTotal)
+				if s.CPUPct < 0 {
+					s.CPUPct = 0
+				}
+			}
+			m.prevBusy, m.prevTotal = busy, total
+
+			memPct := 0.0
+			if s.MemTotalB > 0 {
+				memPct = 100 * float64(s.MemTotalB-s.MemAvailB) / float64(s.MemTotalB)
+			}
+			m.hist[m.histIdx] = HistSample{
+				T: s.CheckedAt.Unix(), CPU: s.CPUPct, Mem: memPct, Load: s.Load1,
+			}
+			m.histIdx = (m.histIdx + 1) % histLen
+			if m.histCount < histLen {
+				m.histCount++
+			}
 			m.last = s
 			m.mu.Unlock()
 			m.check(s)
 		}
 	}
+}
+
+// cpuTimes returns aggregate busy and total jiffies from /proc/stat.
+func cpuTimes(root string) (busy, total uint64) {
+	for _, line := range strings.Split(readFile(filepath.Join(root, "proc/stat")), "\n") {
+		if !strings.HasPrefix(line, "cpu ") {
+			continue
+		}
+		f := strings.Fields(line)
+		for i := 1; i < len(f); i++ {
+			v, err := strconv.ParseUint(f[i], 10, 64)
+			if err != nil {
+				continue
+			}
+			total += v
+			// idle (4) and iowait (5) count as not-busy
+			if i != 4 && i != 5 {
+				busy += v
+			}
+		}
+		break
+	}
+	return
 }
 
 // transition fires the alert only when the condition newly starts; hysteresis
