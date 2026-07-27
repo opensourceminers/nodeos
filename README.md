@@ -4,11 +4,13 @@
 mining fleets.** One daemon, one UI: plug in a Bitaxe, it appears
 automatically and mines against your own node.
 
-> Status: **prototype v0.3.0** — fleet management, discovery, pool control,
-> node monitoring, the DATUM work engine (solo mining against your own node,
-> with auto-switch), a login-protected web UI, Core/Knots selection with
-> pruning, and self-updates from GitHub releases work today. Firmware updates
-> and the flashable appliance image are next.
+> Status: **prototype v0.4.0** — fleet management with staged firmware
+> rollouts and tuning presets, the DATUM work engine (solo mining against your
+> own node, with auto-switch), curated container services (Core Lightning,
+> BTCPay, Electrum server, mempool explorer) with a native Lightning panel, an
+> offline peer world map, node settings, system monitoring, and self-updates
+> from GitHub releases all work today. The flashable appliance image builds
+> from `deploy/build-iso.sh`.
 > Product thinking and full roadmap: [PRODUCT-ANALYSIS.md](PRODUCT-ANALYSIS.md).
 
 Bitcoin only. No shitcoins. No custody — NodeOS never touches private keys.
@@ -206,5 +208,12 @@ nodeosd keeps full systemd hardening (`NoNewPrivileges`, `ProtectSystem`).
 
 ## License
 
-TBD — MIT or Apache-2.0 recommended (see PRODUCT-ANALYSIS.md §15). Decide
-before accepting external contributions.
+[MIT](LICENSE) — © 2026 OpenSourceMiners. Vendor-friendly on purpose: anyone
+may ship NodeOS on their hardware, fork it, or build on it.
+
+Third-party components keep their own licenses and are not redistributed by
+this repository — Bitcoin Core/Knots, [OCEAN's DATUM
+Gateway](https://github.com/OCEAN-xyz/datum_gateway),
+[ESP-Miner](https://github.com/bitaxeorg/ESP-Miner) firmware, and the
+container images of the curated services are downloaded from their own
+sources at install time.

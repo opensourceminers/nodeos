@@ -288,7 +288,7 @@ Reality check: FOSS Bitcoin infrastructure is not venture-scale SaaS. Structure 
 4. **Grants/sponsorships:** OpenSats, HRF, Spiral, corporate sponsors — credible because of the SV2/decentralization angle.
 5. **Never:** app-store rents, tokens, ads, selling data, custody yield anything.
 
-License: core under MIT or Apache-2.0 (vendor-friendly, OSMU-aligned); the enterprise tier proprietary or BSL — decide before first external contribution, not after.
+License: **decided — MIT** (see [LICENSE](LICENSE)): vendor-friendly and OSMU-aligned, so any manufacturer can ship NodeOS on its hardware. A future enterprise tier would be an additive component, not a relicensing of the core.
 
 ---
 
