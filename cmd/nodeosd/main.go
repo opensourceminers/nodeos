@@ -22,6 +22,7 @@ import (
 	"nodeos/internal/fleet"
 	"nodeos/internal/health"
 	"nodeos/internal/lightning"
+	"nodeos/internal/merchant"
 	"nodeos/internal/node"
 	"nodeos/internal/server"
 	"nodeos/internal/services"
@@ -140,6 +141,23 @@ func main() {
 	hm := health.NewMonitor(cfg.DataDir, feed)
 	go hm.Run(ctx)
 
+	// point of sale: invoices, payment tracking, accounting export
+	mm := merchant.New(cfg.DataDir, cfg.Demo)
+	mm.OnChange(func(inv *merchant.Invoice) {
+		switch inv.Status {
+		case merchant.StatusPaid:
+			feed.Add(alerts.Party, "payment_received", "",
+				fmt.Sprintf("Payment received: %.2f € (%s)", inv.AmountEUR, inv.ID))
+		case merchant.StatusSettled:
+			feed.Add(alerts.Info, "payment_settled", "",
+				fmt.Sprintf("Payment confirmed: %.2f €", inv.AmountEUR))
+		case merchant.StatusExpired:
+			feed.Add(alerts.Info, "payment_expired", "",
+				fmt.Sprintf("Payment window expired: %.2f €", inv.AmountEUR))
+		}
+	})
+	go mm.Run(ctx)
+
 	// zero-click discovery on real installs
 	if !cfg.Demo && !*noScan {
 		if cidr, err := fm.StartScan(cfg.ScanCIDR); err == nil {
@@ -154,7 +172,7 @@ func main() {
 		Engine: eng, Auth: authm, Admin: adm, Update: upd,
 		Health: hm, Store: st, Services: services.NewManager(),
 		Lightning: lightning.NewClient(cfg.Lightning.RestURL, cfg.Lightning.RuneFile),
-		ConfigPath: *cfgPath,
+		Merchant: mm, ConfigPath: *cfgPath,
 	}).Handler()
 
 	srv := &http.Server{Addr: cfg.Listen, Handler: handler}

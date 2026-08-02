@@ -43,6 +43,7 @@
 
   <nav id="nav">
     <button data-tab="dashboard" class="active"><span class="ico">▦</span><span class="lbl">Dashboard</span></button>
+    <button data-tab="pos"><span class="ico">€</span><span class="lbl">Kasse</span></button>
     <button data-tab="miners"><span class="ico">⛏</span><span class="lbl">Mining</span><span class="count" id="nav-miner-count"></span></button>
     <button data-tab="node"><span class="ico">⛓</span><span class="lbl">Bitcoin node</span></button>
     <button data-tab="lightning"><span class="ico">⚡</span><span class="lbl">Lightning</span></button>
@@ -138,6 +139,98 @@
     <div class="panel">
       <h2>Recent events</h2>
       <ul class="alert-list" id="dash-alerts"><li class="empty">No events yet</li></ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ POINT OF SALE ============ -->
+<section class="tab" id="tab-pos">
+  <div id="pos-setup" hidden>
+    <div class="panel">
+      <div class="panel-head"><h2>Zahlungen einrichten</h2></div>
+      <div class="note" id="pos-setup-reason"></div>
+      <div class="grid-2" style="margin-top:14px">
+        <div>
+          <label for="pos-business">Firmenname (erscheint auf dem Kassen-Screen)</label>
+          <input id="pos-business" placeholder="Autohaus Muster GmbH">
+          <label for="pos-vat">USt-IdNr. (optional, für den Export)</label>
+          <input id="pos-vat" placeholder="DE123456789">
+          <label for="pos-expiry">Zahlungsfenster (Minuten)</label>
+          <input id="pos-expiry" type="number" min="1" max="120" value="15">
+        </div>
+        <div>
+          <label for="pos-btcpay-url">BTCPay Server URL</label>
+          <input id="pos-btcpay-url" placeholder="http://127.0.0.1:23000">
+          <label for="pos-btcpay-store">Store ID</label>
+          <input id="pos-btcpay-store" placeholder="aus BTCPay → Settings → Store ID">
+          <label for="pos-btcpay-key">API Key</label>
+          <input id="pos-btcpay-key" type="password" placeholder="BTCPay → Account → API Keys">
+          <div class="note">Benötigte Rechte: <code>btcpay.store.cancreateinvoice</code>,
+            <code>btcpay.store.canviewinvoices</code></div>
+        </div>
+      </div>
+      <div style="margin-top:14px"><button class="btn primary" id="pos-save">Speichern &amp; verbinden</button></div>
+      <div class="result-list" id="pos-setup-result"></div>
+    </div>
+  </div>
+
+  <div id="pos-main" hidden>
+    <div class="tiles" id="pos-tiles"></div>
+
+    <div class="grid-2 pos-grid">
+      <div class="panel pos-pad">
+        <div class="pos-amount"><span class="cur">€</span><span id="pos-amount">0,00</span></div>
+        <input id="pos-ref" placeholder="Referenz / Rechnungsnummer (optional)">
+        <div class="keypad" id="pos-keypad">
+          <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+          <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+          <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+          <button data-k="c" class="alt">C</button><button data-k="0">0</button><button data-k="del" class="alt">⌫</button>
+        </div>
+        <button class="btn primary pos-charge" id="pos-charge">Zahlung anfordern</button>
+        <div class="result-list" id="pos-result"></div>
+      </div>
+
+      <div class="panel" id="pos-checkout">
+        <div class="empty" id="pos-idle">Betrag eingeben und „Zahlung anfordern“ — der Kunde scannt dann den QR-Code.</div>
+        <div id="pos-live" hidden>
+          <div class="pos-live-head">
+            <div>
+              <div class="hero-label">Zu zahlen</div>
+              <div class="pos-live-amount" id="pos-live-eur">–</div>
+              <div class="note" id="pos-live-sats"></div>
+            </div>
+            <div style="text-align:right">
+              <div class="hero-label" style="margin-bottom:6px">Status</div>
+              <div id="pos-live-status"></div>
+              <div class="note" id="pos-live-timer"></div>
+            </div>
+          </div>
+          <div class="qr-frame"><img id="pos-qr" alt="Zahlungs-QR-Code"></div>
+          <div class="addr-box"><code id="pos-uri"></code><button class="btn small" id="pos-copy">Kopieren</button></div>
+          <div style="margin-top:12px; display:flex; gap:10px;">
+            <button class="btn" id="pos-new">Neue Zahlung</button>
+            <a class="btn small" id="pos-checkout-link" target="_blank" rel="noopener" hidden>In BTCPay öffnen ↗</a>
+          </div>
+        </div>
+        <div id="pos-done" hidden>
+          <div class="pos-success">
+            <div class="tick">✓</div>
+            <div class="pos-live-amount" id="pos-done-eur">–</div>
+            <div class="note" id="pos-done-note"></div>
+            <button class="btn primary" id="pos-done-new" style="margin-top:16px">Nächste Zahlung</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Zahlungen</h2>
+        <a class="btn small" href="/api/merchant/export.csv" style="margin-left:auto">CSV für die Buchhaltung</a>
+        <button class="btn small" id="pos-settings-btn">Einstellungen</button>
+      </div>
+      <div id="pos-history"><div class="empty">Noch keine Zahlungen.</div></div>
     </div>
   </div>
 </section>

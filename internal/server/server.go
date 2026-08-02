@@ -23,7 +23,9 @@ import (
 	"nodeos/internal/geoip"
 	"nodeos/internal/health"
 	"nodeos/internal/lightning"
+	"nodeos/internal/merchant"
 	"nodeos/internal/node"
+	"nodeos/internal/qr"
 	"nodeos/internal/services"
 	"nodeos/internal/store"
 	"nodeos/internal/support"
@@ -47,6 +49,7 @@ type Deps struct {
 	Store     *store.Store
 	Services  *services.Manager
 	Lightning *lightning.Client
+	Merchant  *merchant.Manager
 	// ConfigPath is included (redacted) in support bundles.
 	ConfigPath string
 }
@@ -66,6 +69,7 @@ type Server struct {
 	store     *store.Store
 	services  *services.Manager
 	lightning *lightning.Client
+	merchant  *merchant.Manager
 	cfgPath   string
 
 	sseMu   sync.Mutex
@@ -78,7 +82,7 @@ func New(d Deps) *Server {
 		fleet: d.Fleet, node: d.Node, feed: d.Feed, engine: d.Engine,
 		auth: d.Auth, admin: d.Admin, update: d.Update,
 		health: d.Health, store: d.Store, services: d.Services,
-		lightning: d.Lightning, cfgPath: d.ConfigPath,
+		lightning: d.Lightning, merchant: d.Merchant, cfgPath: d.ConfigPath,
 		sseSubs: map[chan []byte]struct{}{},
 	}
 	d.Fleet.OnTick(func() { s.broadcast("snapshot", s.statusPayload(60)) })
@@ -187,6 +191,100 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})
+	})
+
+	// ---- merchant / point of sale ----
+
+	mux.HandleFunc("GET /api/merchant", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		provider, ready, reason := s.merchant.ProviderStatus(ctx)
+		writeJSON(w, map[string]any{
+			"settings": s.merchant.PublicSettings(),
+			"provider": provider,
+			"ready":    ready,
+			"reason":   reason,
+			"stats":    s.merchant.Stats(),
+			"demo":     s.cfg.Demo,
+		})
+	})
+
+	mux.HandleFunc("PUT /api/merchant", func(w http.ResponseWriter, r *http.Request) {
+		var st merchant.Settings
+		if err := decode(r, &st); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		if err := s.merchant.SetSettings(st); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		writeJSON(w, s.merchant.PublicSettings())
+	})
+
+	mux.HandleFunc("POST /api/merchant/invoices", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			AmountEUR float64 `json:"amount_eur"`
+			Reference string  `json:"reference"`
+		}
+		if err := decode(r, &req); err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		inv, err := s.merchant.Create(r.Context(), req.AmountEUR, req.Reference)
+		if err != nil {
+			httpErr(w, 400, err)
+			return
+		}
+		writeJSON(w, inv)
+	})
+
+	mux.HandleFunc("GET /api/merchant/invoices", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, s.merchant.List(200))
+	})
+
+	mux.HandleFunc("GET /api/merchant/invoices/{id}", func(w http.ResponseWriter, r *http.Request) {
+		inv := s.merchant.Get(r.PathValue("id"))
+		if inv == nil {
+			httpErr(w, 404, fmt.Errorf("unknown invoice"))
+			return
+		}
+		writeJSON(w, inv)
+	})
+
+	// the QR the customer scans; rendered server-side so the browser needs
+	// no library and the payload never leaves the appliance
+	mux.HandleFunc("GET /api/merchant/invoices/{id}/qr.png", func(w http.ResponseWriter, r *http.Request) {
+		inv := s.merchant.Get(r.PathValue("id"))
+		if inv == nil || inv.PaymentURI == "" {
+			httpErr(w, 404, fmt.Errorf("no payment URI for this invoice"))
+			return
+		}
+		png, err := qr.PNG(inv.PaymentURI, 8)
+		if err != nil {
+			httpErr(w, 500, err)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(png)
+	})
+
+	mux.HandleFunc("GET /api/merchant/export.csv", func(w http.ResponseWriter, r *http.Request) {
+		var from, to time.Time
+		if v := r.URL.Query().Get("from"); v != "" {
+			from, _ = time.Parse("2006-01-02", v)
+		}
+		if v := r.URL.Query().Get("to"); v != "" {
+			if t, err := time.Parse("2006-01-02", v); err == nil {
+				to = t.Add(24 * time.Hour)
+			}
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf("attachment; filename=nodeos-zahlungen-%s.csv", time.Now().Format("2006-01-02")))
+		w.Write([]byte("\xEF\xBB\xBF")) // BOM: Excel opens the file as UTF-8
+		w.Write([]byte(s.merchant.ExportCSV(from, to)))
 	})
 
 	// ---- curated container services ----

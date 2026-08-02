@@ -180,6 +180,7 @@ $("nav").addEventListener("click", (e) => {
   $("sidebar").classList.remove("open"); // close the drawer on mobile
   if (btn.dataset.tab === "lightning") loadLightning();
   if (btn.dataset.tab === "system") loadSysHistory();
+  if (btn.dataset.tab === "pos") loadPos();
   if (snapshot) render();
 });
 
@@ -1202,6 +1203,233 @@ async function loadPeers() {
     btn.textContent = "Refresh peers";
   }
 }
+
+// ---------- point of sale ----------
+
+let posData = null;      // /api/merchant payload
+let posAmount = "";      // digit string, cents
+let posInvoice = null;   // active invoice
+let posTimer = null;
+
+function fmtEUR(v) {
+  return (v || 0).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function posAmountValue() {
+  return parseInt(posAmount || "0", 10) / 100;
+}
+
+function renderPosAmount() {
+  $("pos-amount").textContent = fmtEUR(posAmountValue());
+  $("pos-charge").disabled = posAmountValue() <= 0;
+}
+
+$("pos-keypad").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-k]");
+  if (!btn) return;
+  const k = btn.dataset.k;
+  if (k === "c") posAmount = "";
+  else if (k === "del") posAmount = posAmount.slice(0, -1);
+  else if (posAmount.length < 9) posAmount = (posAmount + k).replace(/^0+/, "");
+  renderPosAmount();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (!document.querySelector("#tab-pos.active") || !$("pos-main").hidden === false) return;
+  if (document.activeElement && document.activeElement.tagName === "INPUT") return;
+  if (e.key >= "0" && e.key <= "9") { if (posAmount.length < 9) posAmount = (posAmount + e.key).replace(/^0+/, ""); renderPosAmount(); }
+  else if (e.key === "Backspace") { posAmount = posAmount.slice(0, -1); renderPosAmount(); }
+  else if (e.key === "Escape") { posAmount = ""; renderPosAmount(); }
+  else if (e.key === "Enter" && posAmountValue() > 0) $("pos-charge").click();
+});
+
+async function loadPos() {
+  try {
+    posData = await api("GET", "/api/merchant");
+  } catch (err) {
+    $("pos-setup-reason").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+    return;
+  }
+  const s = posData.settings || {};
+  const configured = posData.ready;
+  $("pos-setup").hidden = configured;
+  $("pos-main").hidden = !configured;
+
+  if (!configured) {
+    $("pos-setup-reason").innerHTML = posData.reason
+      ? `<span class="fail">${esc(posData.reason)}</span>`
+      : "BTCPay Server verbinden, dann kann die Kasse Zahlungen annehmen.";
+    $("pos-business").value = s.business || "";
+    $("pos-vat").value = s.vat_id || "";
+    $("pos-expiry").value = s.expiry_mins || 15;
+    $("pos-btcpay-url").value = s.btcpay_url || "";
+    $("pos-btcpay-store").value = s.btcpay_store || "";
+    return;
+  }
+
+  const st = posData.stats || {};
+  $("pos-tiles").innerHTML = [
+    { i: "€", l: "Heute", v: `${fmtEUR(st.today_eur)} <small>€</small>` },
+    { i: "▤", l: "Diesen Monat", v: `${fmtEUR(st.month_eur)} <small>€</small>` },
+    { i: "◔", l: "Offen", v: String(st.open || 0), s: st.open ? "warten auf Zahlung" : "" },
+    { i: "◈", l: "Zahlungen gesamt", v: String(st.count || 0),
+      s: posData.demo ? "Demo — simulierte Zahlungen" : (posData.reason || ""),
+      c: posData.demo ? "warn" : "" },
+  ].map(tileHTML).join("");
+
+  renderPosAmount();
+  loadPosHistory();
+}
+
+$("pos-save").addEventListener("click", async () => {
+  try {
+    await api("PUT", "/api/merchant", {
+      enabled: true,
+      business: $("pos-business").value.trim(),
+      vat_id: $("pos-vat").value.trim(),
+      mode: "keep",
+      expiry_mins: parseInt($("pos-expiry").value, 10) || 15,
+      btcpay_url: $("pos-btcpay-url").value.trim(),
+      btcpay_store: $("pos-btcpay-store").value.trim(),
+      btcpay_key: $("pos-btcpay-key").value.trim(),
+    });
+    toast("Gespeichert", "ok");
+    loadPos();
+  } catch (err) {
+    $("pos-setup-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  }
+});
+
+$("pos-settings-btn").addEventListener("click", () => {
+  $("pos-setup").hidden = false;
+  $("pos-main").hidden = true;
+});
+
+$("pos-charge").addEventListener("click", async () => {
+  const amount = posAmountValue();
+  if (amount <= 0) return;
+  $("pos-charge").disabled = true;
+  try {
+    posInvoice = await api("POST", "/api/merchant/invoices", {
+      amount_eur: amount, reference: $("pos-ref").value.trim(),
+    });
+    showInvoice();
+    watchInvoice();
+  } catch (err) {
+    $("pos-result").innerHTML = `<span class="fail">${esc(err.message)}</span>`;
+  } finally {
+    $("pos-charge").disabled = false;
+  }
+});
+
+function showInvoice() {
+  const inv = posInvoice;
+  $("pos-idle").hidden = true;
+  $("pos-done").hidden = true;
+  $("pos-live").hidden = false;
+  $("pos-live-eur").textContent = fmtEUR(inv.amount_eur) + " €";
+  $("pos-live-sats").textContent = inv.amount_sats
+    ? `${inv.amount_sats.toLocaleString("de-DE")} sats · Kurs ${fmtEUR(inv.rate_eur)} €/BTC` : "";
+  $("pos-qr").src = `/api/merchant/invoices/${encodeURIComponent(inv.id)}/qr.png`;
+  $("pos-uri").textContent = inv.payment_uri || "";
+  const link = $("pos-checkout-link");
+  link.hidden = !inv.checkout_url;
+  if (inv.checkout_url) link.href = inv.checkout_url;
+  updateInvoiceStatus(inv);
+}
+
+const POS_STATUS = {
+  pending: ['<span class="status-chip warn"><span class="dot"></span>wartet auf Zahlung</span>', ""],
+  paid: ['<span class="status-chip online"><span class="dot"></span>Zahlung gesehen</span>', "wird bestätigt…"],
+  settled: ['<span class="status-chip online"><span class="dot"></span>bestätigt</span>', ""],
+  expired: ['<span class="status-chip offline"><span class="dot"></span>abgelaufen</span>', ""],
+  failed: ['<span class="status-chip offline"><span class="dot"></span>fehlgeschlagen</span>', ""],
+};
+
+function updateInvoiceStatus(inv) {
+  const [chip] = POS_STATUS[inv.status] || POS_STATUS.pending;
+  $("pos-live-status").innerHTML = chip;
+  const left = Math.max(0, Math.floor((new Date(inv.expires_at) - Date.now()) / 1000));
+  $("pos-live-timer").textContent = inv.status === "pending"
+    ? `noch ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "";
+}
+
+function watchInvoice() {
+  clearInterval(posTimer);
+  posTimer = setInterval(async () => {
+    if (!posInvoice) return clearInterval(posTimer);
+    try {
+      const inv = await api("GET", `/api/merchant/invoices/${encodeURIComponent(posInvoice.id)}`);
+      posInvoice = inv;
+      updateInvoiceStatus(inv);
+      if (inv.status === "paid" || inv.status === "settled") {
+        clearInterval(posTimer);
+        showPaid(inv);
+        loadPos();
+      } else if (inv.status === "expired" || inv.status === "failed") {
+        clearInterval(posTimer);
+      }
+    } catch {}
+  }, 2000);
+}
+
+function showPaid(inv) {
+  $("pos-live").hidden = true;
+  $("pos-done").hidden = false;
+  $("pos-done-eur").textContent = fmtEUR(inv.amount_eur) + " €";
+  $("pos-done-note").textContent = inv.status === "settled"
+    ? "Zahlung bestätigt" : "Zahlung eingegangen — Bestätigung läuft";
+  try { // short confirmation tone; ignored when the browser blocks audio
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.frequency.value = 880; g.gain.value = 0.05;
+    o.start(); o.frequency.setValueAtTime(1320, ac.currentTime + 0.12);
+    o.stop(ac.currentTime + 0.25);
+  } catch {}
+}
+
+function resetPos() {
+  posInvoice = null;
+  posAmount = "";
+  $("pos-ref").value = "";
+  renderPosAmount();
+  $("pos-live").hidden = true;
+  $("pos-done").hidden = true;
+  $("pos-idle").hidden = false;
+  $("pos-result").innerHTML = "";
+}
+$("pos-new").addEventListener("click", resetPos);
+$("pos-done-new").addEventListener("click", resetPos);
+$("pos-copy").addEventListener("click", (e) => copyText($("pos-uri").textContent, e.target));
+
+async function loadPosHistory() {
+  try {
+    const list = await api("GET", "/api/merchant/invoices");
+    if (!list.length) {
+      $("pos-history").innerHTML = `<div class="empty">Noch keine Zahlungen.</div>`;
+      return;
+    }
+    $("pos-history").innerHTML = `<div class="table-wrap"><table class="plain">
+      <thead><tr><th>Zeitpunkt</th><th>Referenz</th><th class="num">Betrag</th>
+        <th class="num">BTC</th><th class="num">Kurs</th><th>Status</th></tr></thead>
+      <tbody>${list.slice(0, 50).map((i) => `<tr>
+        <td>${new Date(i.paid_at || i.created_at).toLocaleString("de-DE")}</td>
+        <td>${esc(i.reference || "–")}</td>
+        <td class="num">${fmtEUR(i.amount_eur)} €</td>
+        <td class="num">${(i.amount_sats / 1e8).toFixed(8)}</td>
+        <td class="num">${fmtEUR(i.rate_eur)}</td>
+        <td>${(POS_STATUS[i.status] || POS_STATUS.pending)[0]}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+  } catch {}
+}
+
+setInterval(() => {
+  if (document.querySelector("#tab-pos.active") && $("auth-overlay").hidden &&
+      !document.hidden && !posInvoice) {
+    loadPos();
+  }
+}, 15000);
 
 // ---------- lightning ----------
 

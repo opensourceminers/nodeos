@@ -765,6 +765,67 @@ details[open] summary::before { content: "▾ "; }
 .auth-card .note { min-height: 1.5em; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
 .auth-card input { margin-top: var(--s3); text-align: center; }
 
+/* ---------- point of sale ---------- */
+
+.pos-grid { align-items: start; }
+.pos-pad { display: flex; flex-direction: column; }
+.pos-amount {
+  display: flex; align-items: baseline; justify-content: center; gap: var(--s2);
+  font-size: 52px; font-weight: 700; letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  padding: var(--s4) 0 var(--s5);
+}
+.pos-amount .cur { font-size: 26px; font-weight: 600; color: var(--muted); }
+
+.keypad {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2);
+  margin-top: var(--s4);
+}
+.keypad button {
+  padding: var(--s5) 0;
+  font-size: 22px; font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--fast), transform var(--fast);
+  font-variant-numeric: tabular-nums;
+}
+.keypad button:hover { background: var(--surface-3); }
+.keypad button:active { transform: scale(0.97); }
+.keypad button.alt { color: var(--ink-2); font-size: 18px; }
+
+.pos-charge {
+  margin-top: var(--s4);
+  width: 100%; padding: var(--s4);
+  font-size: 16px;
+}
+
+.pos-live-head { display: flex; align-items: flex-start; gap: var(--s4); margin-bottom: var(--s4); }
+.pos-live-amount {
+  font-size: 34px; font-weight: 700; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums; margin-top: var(--s1);
+}
+.qr-frame {
+  display: flex; justify-content: center;
+  background: #fff; border-radius: var(--r-md);
+  padding: var(--s3); margin-bottom: var(--s3);
+}
+.qr-frame img { width: 100%; max-width: 280px; height: auto; image-rendering: pixelated; }
+
+.pos-success { text-align: center; padding: var(--s7) var(--s4); }
+.pos-success .tick {
+  width: 68px; height: 68px; margin: 0 auto var(--s4);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--good) 18%, transparent);
+  color: var(--good);
+  font-size: 34px; line-height: 68px;
+  animation: pop 320ms var(--ease);
+}
+@keyframes pop { from { transform: scale(0.6); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pos-success .tick { animation: none; } }
+
 /* ---------- lightning ---------- */
 
 .addr-box {
